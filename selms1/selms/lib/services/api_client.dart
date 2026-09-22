@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/employee.dart';
 import '../models/equipment.dart';
+import '../models/employee_self_service.dart';
 
 class ApiException implements Exception {
   ApiException(this.message);
@@ -424,6 +425,57 @@ class ApiClient {
     if (res.statusCode != 200) throw ApiException(_extractMessage(res));
     final data = jsonDecode(res.body) as Map<String, dynamic>;
     return data['photo_url'] as String;
+  }
+
+  // ---------- Employee self-service ----------
+  //
+  // Called with an employee-role token (still just `hrToken` on this
+  // class — it's really "whatever bearer token this session logged in
+  // with", not HR-specific). Always "me", never take an employee_id: the
+  // backend resolves the caller from the token itself.
+
+  Future<Employee> getMyProfile() async {
+    final res = await http.get(Uri.parse('$baseUrl/api/employee/me'), headers: _headers);
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    return Employee.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  Future<String> uploadMyPhoto(List<int> photoBytes) async {
+    final uri = Uri.parse('$baseUrl/api/employee/me/photo');
+    final request = http.MultipartRequest('POST', uri)
+      ..headers['Authorization'] = 'Bearer $hrToken';
+    request.files.add(
+      http.MultipartFile.fromBytes('photo', photoBytes, filename: 'profile.png'),
+    );
+
+    final streamed = await request.send();
+    final res = await http.Response.fromStream(streamed);
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    return data['profile_image_url'] as String;
+  }
+
+  Future<EmployeeChecklist> getMyChecklist() async {
+    final res = await http.get(Uri.parse('$baseUrl/api/employee/me/checklist'), headers: _headers);
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    return EmployeeChecklist.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  Future<List<CompanyDocument>> getMyDocuments() async {
+    final res = await http.get(Uri.parse('$baseUrl/api/employee/me/documents'), headers: _headers);
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    return (data['documents'] as List)
+        .map((e) => CompanyDocument.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> signMyDocument(String docId) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/employee/me/documents/$docId/sign'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
   }
 
   String _extractMessage(http.Response res) {

@@ -14,6 +14,7 @@ import 'package:http/http.dart' as http;
 import '../theme/selms_colors.dart';
 import 'dashboard_screen.dart';
 import 'it_dashboard_screen.dart';
+import 'employee_home_screen.dart';
 
 enum SelmsRole { hr, it, employee }
 
@@ -118,8 +119,13 @@ class _SelmsLoginScreenState extends State<SelmsLoginScreen> {
             ),
           );
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Signed in as ${_role.label} — screens not built yet.')),
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => EmployeeHomeScreen(
+                apiBaseUrl: widget.apiBaseUrl,
+                employeeToken: token,
+              ),
+            ),
           );
         }
       } else {

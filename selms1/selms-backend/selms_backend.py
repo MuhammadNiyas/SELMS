@@ -328,6 +328,39 @@ def require_hr_or_it(fn):
     return wrapper
 
 
+def require_employee(fn):
+    """Only an employee's own JWT may call the decorated route. Unlike
+    require_hr/require_it, every route below acts on "me" rather than an
+    employee_id taken from the URL, so this also loads the caller's own
+    document onto g.current_employee — one employee's token can never
+    read or sign for another employee."""
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        token = _extract_token()
+        if not token:
+            return jsonify({"message": "Missing or invalid Authorization header."}), 401
+
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        except jwt.ExpiredSignatureError:
+            return jsonify({"message": "Session expired. Please log in again."}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({"message": "Invalid session token."}), 401
+
+        if payload.get("role") != "employee":
+            return jsonify({"message": "Only employees can do this."}), 403
+
+        doc = users.find_one({"_id": ObjectId(payload["sub"]), "role": "employee"})
+        if not doc:
+            return jsonify({"message": "Invalid session token."}), 401
+
+        g.current_user = payload
+        g.current_employee = doc
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
 # ---------- Equipment (IT) ----------
 
 DEFAULT_EQUIPMENT_TYPES = ["Laptop", "Phone", "Headphone", "Monitor", "Mouse", "Keyboard"]
@@ -1139,6 +1172,106 @@ def onboarding_mark_step(employee_id):
         f"onboarding_status.{step}_at": datetime.now(timezone.utc).isoformat(),
     }})
     return jsonify({"message": "Updated."}), 200
+
+
+# ---------- Employee self-service ----------
+#
+# Everything an employee's own mobile session can see or do about
+# themselves: profile, onboarding checklist, and signing the standard
+# company documents. Always scoped to g.current_employee (set by
+# require_employee from the JWT), never to an employee_id in the URL.
+
+COMPANY_DOCUMENTS = [
+    {"id": "employee_handbook", "title": "Employee Handbook", "description": "Company policies and procedures"},
+    {"id": "it_policy", "title": "IT Policy", "description": "Acceptable use of IT resources"},
+    {"id": "code_of_conduct", "title": "Code of Conduct", "description": "Professional standards and ethics"},
+]
+
+
+@app.get("/api/employee/me")
+@require_employee
+def employee_me():
+    return jsonify(_employee_public_view(g.current_employee)), 200
+
+
+@app.post("/api/employee/me/photo")
+@require_employee
+def employee_upload_own_photo():
+    """Same save/record logic as HR's upload_employee_photo, just scoped to
+    the caller's own record instead of an HR-supplied employee_id."""
+    file = request.files.get("photo")
+    if file is None or file.filename == "":
+        return jsonify({"message": "No photo file was sent."}), 400
+
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in ALLOWED_PHOTO_EXTENSIONS:
+        return jsonify({"message": "Photo must be a JPG or PNG file."}), 400
+
+    employee_id = g.current_employee["employee_id"]
+    filename = secure_filename(f"{employee_id}.{ext}")
+    file.save(os.path.join(UPLOAD_FOLDER, filename))
+
+    profile_image_url = f"/uploads/{filename}"
+    users.update_one({"_id": g.current_employee["_id"]}, {"$set": {"profile_image_url": profile_image_url}})
+
+    return jsonify({"message": "Photo uploaded.", "profile_image_url": profile_image_url}), 200
+
+
+@app.get("/api/employee/me/checklist")
+@require_employee
+def employee_checklist():
+    """The 5-item onboarding checklist from the report (fig 3.28), derived
+    from onboarding_status and signed_documents rather than duplicated
+    into its own field — one source of truth for how far onboarding has
+    progressed, whether HR or the employee is looking at it."""
+    status = g.current_employee.get("onboarding_status") or _default_onboarding_status()
+    has_photo = bool(g.current_employee.get("profile_image_url"))
+    signed = g.current_employee.get("signed_documents") or {}
+    all_signed = len(signed) >= len(COMPANY_DOCUMENTS)
+
+    items = [
+        {"id": "welcome_email", "label": "Welcome Email Received",
+         "done": status.get("welcome_email_sent", False), "done_at": status.get("welcome_email_sent_at")},
+        {"id": "documents_signed", "label": "Pre-boarding Documents Signed",
+         "done": all_signed, "done_at": None},
+        {"id": "orientation", "label": "Orientation Session",
+         "done": status.get("orientation_scheduled", False), "done_at": status.get("orientation_scheduled_at")},
+        {"id": "it_equipment", "label": "Collect IT Equipment",
+         "done": status.get("it_equipment_ready", False), "done_at": status.get("it_equipment_ready_at")},
+        {"id": "profile_setup", "label": "Complete Profile Setup",
+         "done": has_photo, "done_at": None},
+    ]
+
+    completed = sum(1 for i in items if i["done"])
+    return jsonify({
+        "items": items,
+        "progress_percent": round(completed / len(items) * 100),
+    }), 200
+
+
+@app.get("/api/employee/me/documents")
+@require_employee
+def employee_documents():
+    signed = g.current_employee.get("signed_documents") or {}
+    out = [
+        {**d, "signed": d["id"] in signed, "signed_at": signed.get(d["id"])}
+        for d in COMPANY_DOCUMENTS
+    ]
+    return jsonify({"documents": out}), 200
+
+
+@app.post("/api/employee/me/documents/<doc_id>/sign")
+@require_employee
+def employee_sign_document(doc_id):
+    if doc_id not in {d["id"] for d in COMPANY_DOCUMENTS}:
+        return jsonify({"message": "Unknown document."}), 404
+
+    now = datetime.now(timezone.utc).isoformat()
+    users.update_one(
+        {"_id": g.current_employee["_id"]},
+        {"$set": {f"signed_documents.{doc_id}": now}},
+    )
+    return jsonify({"message": "Signed.", "signed_at": now}), 200
 
 
 # --- Onboarding automation flow builder ---
