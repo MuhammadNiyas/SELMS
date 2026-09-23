@@ -29,6 +29,7 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
   late Future<Employee> _future;
   Uint8List? _newPhotoBytes;
   bool _uploading = false;
+  bool _savingContact = false;
   String? _error;
 
   @override
@@ -57,6 +58,63 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
       setState(() => _error = 'Could not upload photo: $e');
     } finally {
       if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  Future<void> _editContactInfo(Employee employee) async {
+    final emailCtrl = TextEditingController(text: employee.personalEmail ?? '');
+    final phoneCtrl = TextEditingController(text: employee.mobileNumber ?? '');
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: const Text('Edit contact info', style: TextStyle(fontSize: 15)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Personal email', style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
+            const SizedBox(height: 4),
+            TextField(
+              controller: emailCtrl,
+              keyboardType: TextInputType.emailAddress,
+              decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 14),
+            const Text('Phone', style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
+            const SizedBox(height: 4),
+            TextField(
+              controller: phoneCtrl,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: ElevatedButton.styleFrom(backgroundColor: SelmsColors.ink, foregroundColor: Colors.white),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (saved != true) return;
+
+    setState(() => _savingContact = true);
+    try {
+      await widget.api.updateMyContactInfo(
+        personalEmail: emailCtrl.text.trim(),
+        mobileNumber: phoneCtrl.text.trim(),
+      );
+      await _refresh();
+    } catch (e) {
+      setState(() => _error = 'Could not save contact info: $e');
+    } finally {
+      if (mounted) setState(() => _savingContact = false);
     }
   }
 
@@ -204,8 +262,27 @@ class _EmployeeProfileScreenState extends State<EmployeeProfileScreen> {
                     const Divider(height: 1, color: SelmsColors.border),
                     _field('Work Email', employee.workEmail),
                     const Divider(height: 1, color: SelmsColors.border),
+                    _field('Personal Email', employee.personalEmail),
+                    const Divider(height: 1, color: SelmsColors.border),
                     _field('Phone', employee.mobileNumber),
                   ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _savingContact ? null : () => _editContactInfo(employee),
+                  icon: _savingContact
+                      ? const SizedBox(
+                          width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.edit_outlined, size: 14, color: SelmsColors.ink),
+                  label: Text(_savingContact ? 'Saving…' : 'Edit contact info',
+                      style: const TextStyle(fontSize: 12.5, color: SelmsColors.ink)),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: SelmsColors.border),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
                 ),
               ),
             ],

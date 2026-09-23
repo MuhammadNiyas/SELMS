@@ -2,10 +2,13 @@
 
 import 'package:flutter/material.dart';
 import '../models/employee.dart';
+import '../models/employee_self_service.dart';
 import '../services/api_client.dart';
 import '../theme/selms_colors.dart';
 import '../widgets/app_shell.dart';
 import 'employee_edit_screen.dart';
+
+const _departureTypes = ['Resignation', 'Termination', 'Retirement'];
 
 class EmployeeViewScreen extends StatefulWidget {
   const EmployeeViewScreen({
@@ -26,9 +29,12 @@ class EmployeeViewScreen extends StatefulWidget {
 class _EmployeeViewScreenState extends State<EmployeeViewScreen> {
   late final ApiClient _api = ApiClient(baseUrl: widget.apiBaseUrl, hrToken: widget.hrToken);
   Employee? _employee;
+  OffboardingChecklist? _offboarding;
   bool _loading = true;
   String? _error;
   bool _resending = false;
+  bool _initiatingOffboarding = false;
+  String? _markingStep;
 
   @override
   void initState() {
@@ -43,9 +49,16 @@ class _EmployeeViewScreenState extends State<EmployeeViewScreen> {
     });
     try {
       final e = await _api.getEmployee(widget.employeeId);
+      OffboardingChecklist offboarding;
+      try {
+        offboarding = await _api.getEmployeeOffboarding(widget.employeeId);
+      } catch (_) {
+        offboarding = OffboardingChecklist(started: false);
+      }
       if (!mounted) return;
       setState(() {
         _employee = e;
+        _offboarding = offboarding;
         _loading = false;
       });
     } catch (e) {
@@ -54,6 +67,116 @@ class _EmployeeViewScreenState extends State<EmployeeViewScreen> {
         _error = e.toString();
         _loading = false;
       });
+    }
+  }
+
+  Future<void> _initiateOffboarding() async {
+    final departureTypeCtrl = ValueNotifier<String>(_departureTypes.first);
+    final lastDayCtrl = TextEditingController();
+    final notesCtrl = TextEditingController();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: Colors.white,
+          title: Text('Initiate offboarding — ${_employee!.fullName}', style: const TextStyle(fontSize: 15)),
+          content: SizedBox(
+            width: 360,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Departure type', style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
+                const SizedBox(height: 4),
+                DropdownButtonFormField<String>(
+                  initialValue: departureTypeCtrl.value,
+                  items: _departureTypes
+                      .map((t) => DropdownMenuItem(value: t, child: Text(t)))
+                      .toList(),
+                  onChanged: (v) => setDialogState(() => departureTypeCtrl.value = v ?? departureTypeCtrl.value),
+                  decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
+                ),
+                const SizedBox(height: 14),
+                const Text('Last working day', style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
+                const SizedBox(height: 4),
+                TextField(
+                  controller: lastDayCtrl,
+                  readOnly: true,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    hintText: 'yyyy-mm-dd',
+                    border: OutlineInputBorder(),
+                    suffixIcon: Icon(Icons.calendar_today_outlined, size: 16),
+                  ),
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: DateTime.now(),
+                      firstDate: DateTime.now().subtract(const Duration(days: 365)),
+                      lastDate: DateTime.now().add(const Duration(days: 365)),
+                    );
+                    if (picked != null) {
+                      lastDayCtrl.text =
+                          '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
+                    }
+                  },
+                ),
+                const SizedBox(height: 14),
+                const Text('Notes (optional)', style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
+                const SizedBox(height: 4),
+                TextField(
+                  controller: notesCtrl,
+                  maxLines: 2,
+                  decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: lastDayCtrl.text.isEmpty ? null : () => Navigator.of(context).pop(true),
+              style: ElevatedButton.styleFrom(backgroundColor: SelmsColors.rose, foregroundColor: Colors.white),
+              child: const Text('Initiate offboarding'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (confirmed != true) return;
+    if (lastDayCtrl.text.isEmpty) return;
+
+    setState(() => _initiatingOffboarding = true);
+    try {
+      await _api.initiateOffboarding(
+        widget.employeeId,
+        departureType: departureTypeCtrl.value,
+        lastWorkingDay: lastDayCtrl.text,
+        notes: notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Offboarding initiated.')));
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      if (mounted) setState(() => _initiatingOffboarding = false);
+    }
+  }
+
+  Future<void> _markOffboardingStep(String step) async {
+    setState(() => _markingStep = step);
+    try {
+      await _api.offboardingMarkStep(widget.employeeId, step);
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      if (mounted) setState(() => _markingStep = null);
     }
   }
 
@@ -319,6 +442,24 @@ class _EmployeeViewScreenState extends State<EmployeeViewScreen> {
                             ),
                           ),
                           const SizedBox(height: 8),
+                          if (_offboarding?.started != true)
+                            SizedBox(
+                              width: double.infinity,
+                              child: OutlinedButton.icon(
+                                onPressed: _initiatingOffboarding ? null : _initiateOffboarding,
+                                icon: _initiatingOffboarding
+                                    ? const SizedBox(
+                                        width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
+                                    : const Icon(Icons.logout, size: 14, color: SelmsColors.rose),
+                                label: const Text('Initiate offboarding',
+                                    style: TextStyle(fontSize: 11.5, color: SelmsColors.rose)),
+                                style: OutlinedButton.styleFrom(
+                                  side: const BorderSide(color: SelmsColors.roseBorder),
+                                  padding: const EdgeInsets.symmetric(vertical: 9),
+                                ),
+                              ),
+                            ),
+                          if (_offboarding?.started != true) const SizedBox(height: 8),
                           SizedBox(
                             width: double.infinity,
                             child: OutlinedButton.icon(
@@ -375,9 +516,69 @@ class _EmployeeViewScreenState extends State<EmployeeViewScreen> {
                   _field('Work email', e.workEmail),
                   _field('Role', 'Employee'),
                 ]),
+                if (_offboarding?.started == true) ...[
+                  const SizedBox(height: 20),
+                  _sectionTitle('Offboarding progress'),
+                  _offboardingProgress(_offboarding!),
+                ],
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _offboardingProgress(OffboardingChecklist o) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: SelmsColors.roseBg.withValues(alpha: 0.35),
+        border: Border.all(color: SelmsColors.roseBorder),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('${o.departureType} · Last day: ${o.lastWorkingDay ?? 'TBC'}',
+              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: SelmsColors.rose)),
+          const SizedBox(height: 12),
+          ...o.items.map((item) {
+            final canMark =
+                !item.done && (item.id == 'exit_interview' || item.id == 'access_revoked');
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 5),
+              child: Row(
+                children: [
+                  Icon(
+                    item.done ? Icons.check_circle : Icons.radio_button_unchecked,
+                    size: 16,
+                    color: item.done ? SelmsColors.statusActiveText : SelmsColors.textMuted,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(item.label, style: const TextStyle(fontSize: 12.5)),
+                  ),
+                  if (canMark)
+                    TextButton(
+                      onPressed: _markingStep == (item.id == 'exit_interview'
+                              ? 'exit_interview_scheduled'
+                              : 'access_revoked')
+                          ? null
+                          : () => _markOffboardingStep(
+                              item.id == 'exit_interview' ? 'exit_interview_scheduled' : 'access_revoked'),
+                      child: Text(
+                        _markingStep ==
+                                (item.id == 'exit_interview' ? 'exit_interview_scheduled' : 'access_revoked')
+                            ? 'Marking…'
+                            : 'Mark done',
+                        style: const TextStyle(fontSize: 11.5, color: SelmsColors.ink),
+                      ),
+                    ),
+                ],
+              ),
+            );
+          }),
         ],
       ),
     );

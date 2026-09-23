@@ -478,6 +478,80 @@ class ApiClient {
     if (res.statusCode != 200) throw ApiException(_extractMessage(res));
   }
 
+  Future<void> updateMyContactInfo({String? mobileNumber, String? personalEmail}) async {
+    final res = await http.put(
+      Uri.parse('$baseUrl/api/employee/me/profile'),
+      headers: _headers,
+      body: jsonEncode({
+        if (mobileNumber != null) 'mobile_number': mobileNumber,
+        if (personalEmail != null) 'personal_email': personalEmail,
+      }),
+    );
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+  }
+
+  Future<EmployeeNotifications> getMyNotifications() async {
+    final res = await http.get(Uri.parse('$baseUrl/api/employee/me/notifications'), headers: _headers);
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    return EmployeeNotifications.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  Future<void> markMyNotificationsRead() async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/employee/me/notifications/mark-read'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+  }
+
+  Future<OffboardingChecklist> getMyOffboarding() async {
+    final res = await http.get(Uri.parse('$baseUrl/api/employee/me/offboarding'), headers: _headers);
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    return OffboardingChecklist.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  // ---------- Offboarding status (HR) ----------
+  //
+  // The real per-employee "HR marked this person as departing" state —
+  // separate from getOffboardingFlowTemplate/getOffboardingEmployeeFlow
+  // above, which only edit the shape of the automation node chain.
+
+  Future<void> initiateOffboarding(
+    String employeeId, {
+    required String departureType,
+    required String lastWorkingDay,
+    String? notes,
+  }) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/employees/$employeeId/offboarding/initiate'),
+      headers: _headers,
+      body: jsonEncode({
+        'departure_type': departureType,
+        'last_working_day': lastWorkingDay,
+        if (notes != null) 'notes': notes,
+      }),
+    );
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+  }
+
+  Future<OffboardingChecklist> getEmployeeOffboarding(String employeeId) async {
+    final res = await http.get(
+      Uri.parse('$baseUrl/api/employees/$employeeId/offboarding'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    return OffboardingChecklist.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  Future<void> offboardingMarkStep(String employeeId, String step) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/offboarding/$employeeId/mark-step'),
+      headers: _headers,
+      body: jsonEncode({'step': step}),
+    );
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+  }
+
   String _extractMessage(http.Response res) {
     try {
       final data = jsonDecode(res.body) as Map<String, dynamic>;

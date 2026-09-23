@@ -1274,6 +1274,235 @@ def employee_sign_document(doc_id):
     return jsonify({"message": "Signed.", "signed_at": now}), 200
 
 
+@app.put("/api/employee/me/profile")
+@require_employee
+def employee_update_own_profile():
+    """Deliberately narrow — an employee can correct their own contact
+    details, nothing that affects payroll, role, or compliance records
+    (those stay HR-only via PUT /api/employees/<id>)."""
+    body = request.get_json(silent=True) or {}
+    updates = {}
+    if "mobile_number" in body:
+        value = (body.get("mobile_number") or "").strip()
+        if not value:
+            return jsonify({"message": "Mobile number cannot be empty."}), 400
+        updates["mobile_number"] = value
+    if "personal_email" in body:
+        value = (body.get("personal_email") or "").strip().lower()
+        if not value:
+            return jsonify({"message": "Personal email cannot be empty."}), 400
+        updates["personal_email"] = value
+
+    if not updates:
+        return jsonify({"message": "Nothing to update."}), 400
+
+    users.update_one({"_id": g.current_employee["_id"]}, {"$set": updates})
+    return jsonify({"message": "Profile updated."}), 200
+
+
+@app.get("/api/employee/me/notifications")
+@require_employee
+def employee_notifications():
+    """Every timestamped event on this employee's own record, newest
+    first. There's no separate notifications collection — like the
+    checklist, this is derived straight from the fields HR/IT already
+    write to, so it can never drift out of sync with what actually
+    happened. Read state is a single 'read everything before this
+    timestamp' marker rather than per-notification flags."""
+    emp = g.current_employee
+    onboarding = emp.get("onboarding_status") or {}
+    offboarding = emp.get("offboarding_status") or {}
+    signed = emp.get("signed_documents") or {}
+    read_before = emp.get("notifications_read_at")
+
+    events = []
+    if onboarding.get("welcome_email_sent_at"):
+        events.append(("welcome_email", "Welcome email sent",
+                        "Your onboarding has started.", onboarding["welcome_email_sent_at"]))
+    if onboarding.get("orientation_scheduled_at"):
+        events.append(("orientation_scheduled", "Orientation session scheduled",
+                        "HR has scheduled your orientation.", onboarding["orientation_scheduled_at"]))
+    if onboarding.get("it_equipment_ready_at"):
+        events.append(("it_equipment_ready", "IT equipment ready",
+                        "Your equipment is ready for collection.", onboarding["it_equipment_ready_at"]))
+
+    doc_titles = {d["id"]: d["title"] for d in COMPANY_DOCUMENTS}
+    for doc_id, signed_at in signed.items():
+        events.append((f"doc_signed_{doc_id}", f"You signed {doc_titles.get(doc_id, doc_id)}",
+                        "Document acknowledged.", signed_at))
+
+    if offboarding.get("started_at"):
+        events.append(("offboarding_started", "Offboarding started",
+                        f"Last working day: {offboarding.get('last_working_day') or 'TBC'}.",
+                        offboarding["started_at"]))
+    if offboarding.get("exit_interview_scheduled_at"):
+        events.append(("exit_interview_scheduled", "Exit interview scheduled",
+                        "HR has scheduled your exit interview.", offboarding["exit_interview_scheduled_at"]))
+    if offboarding.get("access_revoked_at"):
+        events.append(("access_revoked", "System access revoked",
+                        "Your company system access has been revoked.", offboarding["access_revoked_at"]))
+
+    events.sort(key=lambda e: e[3], reverse=True)
+    out = [
+        {"id": eid, "title": title, "message": msg, "at": at,
+         "read": bool(read_before) and read_before >= at}
+        for eid, title, msg, at in events
+    ]
+    return jsonify({"notifications": out, "unread_count": sum(1 for n in out if not n["read"])}), 200
+
+
+@app.post("/api/employee/me/notifications/mark-read")
+@require_employee
+def employee_mark_notifications_read():
+    now = datetime.now(timezone.utc).isoformat()
+    users.update_one({"_id": g.current_employee["_id"]}, {"$set": {"notifications_read_at": now}})
+    return jsonify({"message": "Marked as read.", "read_at": now}), 200
+
+
+@app.get("/api/employee/me/offboarding")
+@require_employee
+def employee_offboarding():
+    """Mirrors the onboarding checklist, but only meaningful once HR has
+    actually initiated offboarding for this employee — until then there's
+    nothing to show, so the Offboarding tab stays hidden client-side."""
+    status = g.current_employee.get("offboarding_status") or _default_offboarding_status()
+    if not status.get("started"):
+        return jsonify({"started": False}), 200
+
+    employee_id = g.current_employee["employee_id"]
+    equipment_outstanding = equipment.count_documents({
+        "assigned_to_employee_id": employee_id, "status": "assigned",
+    })
+
+    items = [
+        {"id": "departure_recorded", "label": "Departure Recorded",
+         "done": True, "done_at": status.get("started_at")},
+        {"id": "exit_interview", "label": "Exit Interview",
+         "done": status.get("exit_interview_scheduled", False),
+         "done_at": status.get("exit_interview_scheduled_at")},
+        {"id": "equipment_returned", "label": "Equipment Returned",
+         "done": equipment_outstanding == 0, "done_at": None},
+        {"id": "access_revoked", "label": "IT Access Revoked",
+         "done": status.get("access_revoked", False), "done_at": status.get("access_revoked_at")},
+    ]
+    completed = sum(1 for i in items if i["done"])
+
+    return jsonify({
+        "started": True,
+        "departure_type": status.get("departure_type"),
+        "last_working_day": status.get("last_working_day"),
+        "items": items,
+        "progress_percent": round(completed / len(items) * 100),
+    }), 200
+
+
+# ---------- Offboarding status (real per-employee tracking) ----------
+#
+# Separate from the offboarding *flow builder* below, which only edits the
+# shape of the automation template/per-employee node chain. This is the
+# actual "HR marked this employee as departing" state — the thing the
+# report's fig 3.12 "Initiate Offboarding" popup describes but that had
+# no backend behind it until now.
+
+OFFBOARDING_MANUAL_STEPS = {"exit_interview_scheduled", "access_revoked"}
+
+
+def _default_offboarding_status():
+    return {
+        "started": False, "started_at": None, "started_by": None,
+        "departure_type": None, "last_working_day": None, "notes": None,
+        "exit_interview_scheduled": False, "exit_interview_scheduled_at": None,
+        "access_revoked": False, "access_revoked_at": None,
+    }
+
+
+@app.post("/api/employees/<employee_id>/offboarding/initiate")
+@require_hr
+def initiate_offboarding(employee_id):
+    doc = users.find_one({"employee_id": employee_id, "role": "employee"})
+    if not doc:
+        return jsonify({"message": "Employee not found."}), 404
+
+    body = request.get_json(silent=True) or {}
+    departure_type = (body.get("departure_type") or "").strip()
+    last_working_day = (body.get("last_working_day") or "").strip()
+    if not departure_type or not last_working_day:
+        return jsonify({"message": "Departure type and last working day are required."}), 400
+
+    now = datetime.now(timezone.utc).isoformat()
+    users.update_one({"employee_id": employee_id}, {"$set": {
+        "offboarding_status.started": True,
+        "offboarding_status.started_at": now,
+        "offboarding_status.started_by": g.current_user["email"],
+        "offboarding_status.departure_type": departure_type,
+        "offboarding_status.last_working_day": last_working_day,
+        "offboarding_status.notes": (body.get("notes") or "").strip(),
+    }})
+    return jsonify({"message": "Offboarding initiated."}), 200
+
+
+@app.get("/api/employees/<employee_id>/offboarding")
+@require_hr
+def get_employee_offboarding(employee_id):
+    """HR's view of the same computation employee_offboarding does for
+    'me' — same shape, just addressed by employee_id instead of the
+    caller's own token."""
+    doc = users.find_one({"employee_id": employee_id, "role": "employee"})
+    if not doc:
+        return jsonify({"message": "Employee not found."}), 404
+
+    status = doc.get("offboarding_status") or _default_offboarding_status()
+    if not status.get("started"):
+        return jsonify({"started": False}), 200
+
+    equipment_outstanding = equipment.count_documents({
+        "assigned_to_employee_id": employee_id, "status": "assigned",
+    })
+    items = [
+        {"id": "departure_recorded", "label": "Departure Recorded",
+         "done": True, "done_at": status.get("started_at")},
+        {"id": "exit_interview", "label": "Exit Interview",
+         "done": status.get("exit_interview_scheduled", False),
+         "done_at": status.get("exit_interview_scheduled_at")},
+        {"id": "equipment_returned", "label": "Equipment Returned",
+         "done": equipment_outstanding == 0, "done_at": None},
+        {"id": "access_revoked", "label": "IT Access Revoked",
+         "done": status.get("access_revoked", False), "done_at": status.get("access_revoked_at")},
+    ]
+    completed = sum(1 for i in items if i["done"])
+
+    return jsonify({
+        "started": True,
+        "departure_type": status.get("departure_type"),
+        "last_working_day": status.get("last_working_day"),
+        "notes": status.get("notes"),
+        "items": items,
+        "progress_percent": round(completed / len(items) * 100),
+    }), 200
+
+
+@app.post("/api/offboarding/<employee_id>/mark-step")
+@require_hr
+def offboarding_mark_step(employee_id):
+    """Manual checkpoint for the two offboarding steps that don't have a
+    real module behind them yet (exit interview, access revocation) —
+    same pattern as onboarding_mark_step. Equipment return is never
+    manual: it's computed live from the equipment collection instead."""
+    step = (request.get_json(silent=True) or {}).get("step")
+    if step not in OFFBOARDING_MANUAL_STEPS:
+        return jsonify({"message": "Unrecognised step."}), 400
+
+    doc = users.find_one({"employee_id": employee_id, "role": "employee"})
+    if not doc:
+        return jsonify({"message": "Employee not found."}), 404
+
+    users.update_one({"employee_id": employee_id}, {"$set": {
+        f"offboarding_status.{step}": True,
+        f"offboarding_status.{step}_at": datetime.now(timezone.utc).isoformat(),
+    }})
+    return jsonify({"message": "Updated."}), 200
+
+
 # --- Onboarding automation flow builder ---
 #
 # One "template" document (_id: "template") is the reusable default every
