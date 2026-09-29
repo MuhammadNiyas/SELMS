@@ -89,6 +89,7 @@ onboarding_flows = db["onboarding_flows"]
 offboarding_flows = db["offboarding_flows"]
 equipment = db["equipment"]
 bookings = db["bookings"]
+messages = db["messages"]
 
 
 # ---------- Email ----------
@@ -1323,12 +1324,12 @@ def hr_chat():
         "don't have that information rather than guessing. Keep answers short and "
         "direct.\n\nCurrent system snapshot:\n" + _hr_chat_snapshot()
     )
-    messages = [{"role": m["role"], "content": m["content"]}
-                for m in history if m.get("role") in ("user", "assistant")]
-    messages.append({"role": "user", "content": message})
+    anthropic_messages = [{"role": m["role"], "content": m["content"]}
+                          for m in history if m.get("role") in ("user", "assistant")]
+    anthropic_messages.append({"role": "user", "content": message})
 
     try:
-        reply = _chat_completion(system_prompt, messages)
+        reply = _chat_completion(system_prompt, anthropic_messages)
     except Exception as exc:
         return jsonify({"message": f"Could not reach the assistant: {exc}"}), 502
 
@@ -1494,16 +1495,200 @@ def employee_chat():
         "This employee's own status:\n" + _employee_chat_snapshot(g.current_employee) + "\n\n"
         "Company FAQ knowledge:\n" + EMPLOYEE_FAQ
     )
-    messages = [{"role": m["role"], "content": m["content"]}
-                for m in history if m.get("role") in ("user", "assistant")]
-    messages.append({"role": "user", "content": message})
+    anthropic_messages = [{"role": m["role"], "content": m["content"]}
+                          for m in history if m.get("role") in ("user", "assistant")]
+    anthropic_messages.append({"role": "user", "content": message})
 
     try:
-        reply = _chat_completion(system_prompt, messages)
+        reply = _chat_completion(system_prompt, anthropic_messages)
     except Exception as exc:
         return jsonify({"message": f"Could not reach the assistant: {exc}"}), 502
 
     return jsonify({"reply": reply}), 200
+
+
+# ---------- Messaging (Talk to HR / Talk to IT) ----------
+#
+# Plain human-to-human messages - separate from the AI chatbot above.
+# One thread per (employee, target_role) pair: every employee has at
+# most one conversation with "HR" as a whole and one with "IT" as a
+# whole, not with a specific staff member, since either role is treated
+# as one shared inbox any HR/IT account can see and reply from.
+#
+# No websockets/Firebase - the client re-polls GET on a timer instead.
+# Read state is the same "single marker timestamp" pattern used for
+# notifications: one field per (thread, viewer) pair on the employee's
+# own record, rather than a read flag on every individual message.
+
+def _serialize_message(doc):
+    return {
+        "id": str(doc["_id"]),
+        "employee_id": doc["employee_id"],
+        "employee_name": doc["employee_name"],
+        "target_role": doc["target_role"],
+        "sender_role": doc["sender_role"],
+        "sender_name": doc["sender_name"],
+        "content": doc["content"],
+        "created_at": doc["created_at"],
+    }
+
+
+@app.get("/api/employee/me/messages/<target_role>")
+@require_employee
+def employee_get_messages(target_role):
+    if target_role not in ("hr", "it"):
+        return jsonify({"message": "target_role must be 'hr' or 'it'."}), 400
+
+    employee_id = g.current_employee["employee_id"]
+    docs = list(messages.find({"employee_id": employee_id, "target_role": target_role})
+                .sort("created_at", 1))
+
+    users.update_one(
+        {"_id": g.current_employee["_id"]},
+        {"$set": {f"{target_role}_thread_read_by_employee_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return jsonify({"messages": [_serialize_message(d) for d in docs]}), 200
+
+
+@app.post("/api/employee/me/messages/<target_role>")
+@require_employee
+def employee_send_message(target_role):
+    if target_role not in ("hr", "it"):
+        return jsonify({"message": "target_role must be 'hr' or 'it'."}), 400
+
+    content = ((request.get_json(silent=True) or {}).get("content") or "").strip()
+    if not content:
+        return jsonify({"message": "content is required."}), 400
+
+    doc = {
+        "employee_id": g.current_employee["employee_id"],
+        "employee_name": g.current_employee["full_name"],
+        "target_role": target_role,
+        "sender_role": "employee",
+        "sender_name": g.current_employee["full_name"],
+        "content": content,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    result = messages.insert_one(doc)
+    doc["_id"] = result.inserted_id
+    return jsonify(_serialize_message(doc)), 201
+
+
+def _staff_inbox(target_role, read_marker_field):
+    """Shared by GET /api/hr/messages and GET /api/it/messages: one row
+    per employee who has any message in this target_role's threads,
+    newest conversation first, with a real unread count computed against
+    that staff role's own read marker."""
+    docs = list(messages.find({"target_role": target_role}).sort("created_at", 1))
+    by_employee = {}
+    for d in docs:
+        by_employee.setdefault(d["employee_id"], {"employee_name": d["employee_name"], "messages": []})
+        by_employee[d["employee_id"]]["messages"].append(d)
+
+    rows = []
+    for employee_id, thread in by_employee.items():
+        emp = users.find_one({"employee_id": employee_id, "role": "employee"})
+        read_marker = (emp or {}).get(read_marker_field)
+        unread = sum(
+            1 for m in thread["messages"]
+            if m["sender_role"] == "employee" and (not read_marker or m["created_at"] > read_marker)
+        )
+        last = thread["messages"][-1]
+        rows.append({
+            "employee_id": employee_id,
+            "employee_name": thread["employee_name"],
+            "last_message": last["content"],
+            "last_message_at": last["created_at"],
+            "last_sender_role": last["sender_role"],
+            "unread_count": unread,
+        })
+
+    rows.sort(key=lambda r: r["last_message_at"], reverse=True)
+    return rows
+
+
+@app.get("/api/hr/messages")
+@require_hr
+def hr_list_messages():
+    return jsonify({"conversations": _staff_inbox("hr", "hr_thread_read_by_hr_at")}), 200
+
+
+@app.get("/api/hr/messages/<employee_id>")
+@require_hr
+def hr_get_thread(employee_id):
+    docs = list(messages.find({"employee_id": employee_id, "target_role": "hr"}).sort("created_at", 1))
+    users.update_one(
+        {"employee_id": employee_id},
+        {"$set": {"hr_thread_read_by_hr_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return jsonify({"messages": [_serialize_message(d) for d in docs]}), 200
+
+
+@app.post("/api/hr/messages/<employee_id>")
+@require_hr
+def hr_send_message(employee_id):
+    emp = users.find_one({"employee_id": employee_id, "role": "employee"})
+    if not emp:
+        return jsonify({"message": "Employee not found."}), 404
+
+    content = ((request.get_json(silent=True) or {}).get("content") or "").strip()
+    if not content:
+        return jsonify({"message": "content is required."}), 400
+
+    doc = {
+        "employee_id": employee_id,
+        "employee_name": emp["full_name"],
+        "target_role": "hr",
+        "sender_role": "hr",
+        "sender_name": g.current_user.get("full_name") or "HR",
+        "content": content,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    result = messages.insert_one(doc)
+    doc["_id"] = result.inserted_id
+    return jsonify(_serialize_message(doc)), 201
+
+
+@app.get("/api/it/messages")
+@require_it
+def it_list_messages():
+    return jsonify({"conversations": _staff_inbox("it", "it_thread_read_by_it_at")}), 200
+
+
+@app.get("/api/it/messages/<employee_id>")
+@require_it
+def it_get_thread(employee_id):
+    docs = list(messages.find({"employee_id": employee_id, "target_role": "it"}).sort("created_at", 1))
+    users.update_one(
+        {"employee_id": employee_id},
+        {"$set": {"it_thread_read_by_it_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return jsonify({"messages": [_serialize_message(d) for d in docs]}), 200
+
+
+@app.post("/api/it/messages/<employee_id>")
+@require_it
+def it_send_message(employee_id):
+    emp = users.find_one({"employee_id": employee_id, "role": "employee"})
+    if not emp:
+        return jsonify({"message": "Employee not found."}), 404
+
+    content = ((request.get_json(silent=True) or {}).get("content") or "").strip()
+    if not content:
+        return jsonify({"message": "content is required."}), 400
+
+    doc = {
+        "employee_id": employee_id,
+        "employee_name": emp["full_name"],
+        "target_role": "it",
+        "sender_role": "it",
+        "sender_name": g.current_user.get("full_name") or "IT",
+        "content": content,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    result = messages.insert_one(doc)
+    doc["_id"] = result.inserted_id
+    return jsonify(_serialize_message(doc)), 201
 
 
 @app.get("/api/employee/me/notifications")
@@ -1547,6 +1732,14 @@ def employee_notifications():
     if offboarding.get("access_revoked_at"):
         events.append(("access_revoked", "System access revoked",
                         "Your company system access has been revoked.", offboarding["access_revoked_at"]))
+
+    employee_id = emp["employee_id"]
+    for reply in messages.find({
+        "employee_id": employee_id, "sender_role": {"$in": ["hr", "it"]},
+    }):
+        label = "HR" if reply["sender_role"] == "hr" else "IT"
+        events.append((f"message_{reply['_id']}", f"New message from {label}",
+                        reply["content"][:80], reply["created_at"]))
 
     events.sort(key=lambda e: e[3], reverse=True)
     out = [

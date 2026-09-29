@@ -11,8 +11,9 @@ import '../screens/selms_login_screen.dart';
 import '../screens/it_dashboard_screen.dart';
 import '../screens/it_products_screen.dart';
 import '../screens/it_scan_screen.dart';
+import '../screens/it_messages_screen.dart';
 
-enum ItRoute { dashboard, products, scan }
+enum ItRoute { dashboard, products, scan, messages }
 
 class ItAppShell extends StatefulWidget {
   const ItAppShell({
@@ -169,6 +170,19 @@ class _ItSidebar extends StatelessWidget {
               Navigator.of(context).pushReplacement(
                 MaterialPageRoute(
                   builder: (_) => ItScanScreen(apiBaseUrl: apiBaseUrl, itToken: itToken),
+                ),
+              );
+            },
+          ),
+          _ItNavItem(
+            icon: Icons.chat_bubble_outline,
+            label: 'Messages',
+            active: activeRoute == ItRoute.messages,
+            onTap: () {
+              if (activeRoute == ItRoute.messages) return;
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(
+                  builder: (_) => ItMessagesScreen(apiBaseUrl: apiBaseUrl, itToken: itToken),
                 ),
               );
             },

@@ -13,9 +13,10 @@ import '../screens/employee_directory_screen.dart';
 import '../screens/onboarding_screen.dart';
 import '../screens/offboarding_screen.dart';
 import '../screens/smart_schedule_screen.dart';
+import '../screens/hr_messages_screen.dart';
 import 'chat_panel.dart';
 
-enum SelmsRoute { dashboard, employees, onboarding, offboarding, smartSchedule }
+enum SelmsRoute { dashboard, employees, onboarding, offboarding, smartSchedule, messages }
 
 class AppShell extends StatefulWidget {
   const AppShell({
@@ -254,6 +255,19 @@ class _Sidebar extends StatelessWidget {
               Navigator.of(context).pushReplacement(
                 MaterialPageRoute(
                   builder: (_) => SmartScheduleScreen(apiBaseUrl: apiBaseUrl, hrToken: hrToken),
+                ),
+              );
+            },
+          ),
+          _NavItem(
+            icon: Icons.chat_bubble_outline,
+            label: 'Messages',
+            active: activeRoute == SelmsRoute.messages,
+            onTap: () {
+              if (activeRoute == SelmsRoute.messages) return;
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(
+                  builder: (_) => HrMessagesScreen(apiBaseUrl: apiBaseUrl, hrToken: hrToken),
                 ),
               );
             },

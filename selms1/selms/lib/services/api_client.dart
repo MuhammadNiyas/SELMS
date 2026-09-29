@@ -6,6 +6,7 @@ import '../models/employee.dart';
 import '../models/equipment.dart';
 import '../models/employee_self_service.dart';
 import '../models/chat.dart';
+import '../models/message.dart';
 
 class ApiException implements Exception {
   ApiException(this.message);
@@ -602,6 +603,80 @@ class ApiClient {
     );
     if (res.statusCode != 200) throw ApiException(_extractMessage(res));
     return (jsonDecode(res.body) as Map<String, dynamic>)['reply'] as String;
+  }
+
+  // ---------- Messaging (Talk to HR / Talk to IT) ----------
+  //
+  // Plain human messages, distinct from the AI chatbot above. No push —
+  // callers re-poll getMyMessages/getHrThread/getItThread on a timer.
+
+  Future<List<ChatMessage>> getMyMessages(String targetRole) async {
+    final res = await http.get(
+      Uri.parse('$baseUrl/api/employee/me/messages/$targetRole'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    return (data['messages'] as List).map((e) => ChatMessage.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<void> sendMyMessage(String targetRole, String content) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/employee/me/messages/$targetRole'),
+      headers: _headers,
+      body: jsonEncode({'content': content}),
+    );
+    if (res.statusCode != 201) throw ApiException(_extractMessage(res));
+  }
+
+  Future<List<MessageConversation>> getHrConversations() async {
+    final res = await http.get(Uri.parse('$baseUrl/api/hr/messages'), headers: _headers);
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    return (data['conversations'] as List)
+        .map((e) => MessageConversation.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<List<ChatMessage>> getHrThread(String employeeId) async {
+    final res = await http.get(Uri.parse('$baseUrl/api/hr/messages/$employeeId'), headers: _headers);
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    return (data['messages'] as List).map((e) => ChatMessage.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<void> sendHrMessage(String employeeId, String content) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/hr/messages/$employeeId'),
+      headers: _headers,
+      body: jsonEncode({'content': content}),
+    );
+    if (res.statusCode != 201) throw ApiException(_extractMessage(res));
+  }
+
+  Future<List<MessageConversation>> getItConversations() async {
+    final res = await http.get(Uri.parse('$baseUrl/api/it/messages'), headers: _headers);
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    return (data['conversations'] as List)
+        .map((e) => MessageConversation.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<List<ChatMessage>> getItThread(String employeeId) async {
+    final res = await http.get(Uri.parse('$baseUrl/api/it/messages/$employeeId'), headers: _headers);
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    return (data['messages'] as List).map((e) => ChatMessage.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<void> sendItMessage(String employeeId, String content) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/it/messages/$employeeId'),
+      headers: _headers,
+      body: jsonEncode({'content': content}),
+    );
+    if (res.statusCode != 201) throw ApiException(_extractMessage(res));
   }
 
   String _extractMessage(http.Response res) {
