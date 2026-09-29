@@ -1072,6 +1072,60 @@ def onboarding_candidates():
     return jsonify({"candidates": out}), 200
 
 
+@app.post("/api/onboarding/<employee_id>/auto-start")
+@require_hr
+def onboarding_auto_start(employee_id):
+    """The one-click automation entry point: drafts the welcome email via
+    Claude and auto-books an orientation slot via the same conflict-checker
+    behind Smart Scheduling — both in one call, instead of HR doing them
+    as two separate manual steps. Marks onboarding as started immediately
+    so progress tracking (and the employee's own checklist/notifications)
+    begins right away. Deliberately does NOT send the email itself — HR
+    still reviews the draft this returns and calls the existing
+    /send-email endpoint when ready, so nothing goes to a new hire's
+    inbox without a human looking at it first."""
+    doc = users.find_one({"employee_id": employee_id, "role": "employee"})
+    if not doc:
+        return jsonify({"message": "Employee not found."}), 404
+
+    draft = draft_welcome_email(
+        doc["full_name"], doc["job_title"], doc["department"], doc["work_email"], "",
+    )
+
+    slot = _find_next_available_slot(DEFAULT_SESSION_MINUTES)
+    now = datetime.now(timezone.utc).isoformat()
+    updates = {
+        "onboarding_status.started": True,
+        "onboarding_status.started_by": g.current_user["email"],
+    }
+    existing_status = doc.get("onboarding_status") or {}
+    if not existing_status.get("started"):
+        updates["onboarding_status.started_at"] = now
+
+    if slot is not None:
+        bookings.insert_one({
+            "employee_id": employee_id,
+            "employee_name": doc["full_name"],
+            "session_type": "orientation",
+            "title": SESSION_TYPES["orientation"],
+            "date": slot["date"],
+            "start_time": slot["start_time"],
+            "duration_minutes": slot["duration_minutes"],
+            "location": "",
+            "created_at": now,
+        })
+        updates["onboarding_status.orientation_scheduled"] = True
+        updates["onboarding_status.orientation_scheduled_at"] = now
+
+    users.update_one({"employee_id": employee_id}, {"$set": updates})
+
+    return jsonify({
+        "subject": draft["subject"],
+        "body": draft["body"],
+        "orientation": slot,  # null if no free slot was found in the next 14 days
+    }), 200
+
+
 @app.post("/api/onboarding/<employee_id>/draft-email")
 @require_hr
 def onboarding_draft_email(employee_id):
@@ -1746,15 +1800,14 @@ def list_bookings():
     return jsonify({"bookings": docs}), 200
 
 
-@app.get("/api/bookings/suggest")
-@require_hr
-def suggest_booking_slot():
+def _find_next_available_slot(duration_minutes):
     """Looks 14 days ahead from today, finds the first work-hours slot of
     the requested duration that doesn't overlap any existing booking.
     Simple linear scan — fine at this scale, not meant to be a production
-    optimizer."""
-    duration = int(request.args.get("duration_minutes") or DEFAULT_SESSION_MINUTES)
-
+    optimizer. Returns {date, start_time, duration_minutes} or None.
+    Shared by the manual GET /api/bookings/suggest route and the
+    automated onboarding flow below, so "smart scheduling" means the
+    same thing in both places."""
     today = datetime.now(timezone.utc).date()
     for day_offset in range(14):
         day = today + timedelta(days=day_offset)
@@ -1769,17 +1822,26 @@ def suggest_booking_slot():
             busy.append((b_start, b_end))
 
         slot_start = WORKDAY_START_MINUTES
-        while slot_start + duration <= WORKDAY_END_MINUTES:
-            slot_end = slot_start + duration
+        while slot_start + duration_minutes <= WORKDAY_END_MINUTES:
+            slot_end = slot_start + duration_minutes
             if not any(_booking_overlaps(slot_start, slot_end, b[0], b[1]) for b in busy):
-                return jsonify({
+                return {
                     "date": date_str,
                     "start_time": _minutes_to_time(slot_start),
-                    "duration_minutes": duration,
-                }), 200
+                    "duration_minutes": duration_minutes,
+                }
             slot_start += 30  # step forward in 30-minute increments
 
-    return jsonify({"message": "No free slot found in the next 14 days."}), 404
+    return None
+
+
+@app.get("/api/bookings/suggest")
+@require_hr
+def suggest_booking_slot():
+    slot = _find_next_available_slot(int(request.args.get("duration_minutes") or DEFAULT_SESSION_MINUTES))
+    if slot is None:
+        return jsonify({"message": "No free slot found in the next 14 days."}), 404
+    return jsonify(slot), 200
 
 
 if __name__ == "__main__":

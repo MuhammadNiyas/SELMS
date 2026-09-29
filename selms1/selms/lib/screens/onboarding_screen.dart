@@ -303,6 +303,47 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _markDirty();
   }
 
+  bool _startingOnboarding = false;
+
+  /// One-click automation: drafts the welcome email and auto-books
+  /// orientation server-side (see /api/onboarding/<id>/auto-start), then
+  /// opens the same review dialog HR would use manually — sending is
+  /// still a separate, deliberate click.
+  Future<void> _startOnboardingAuto() async {
+    if (_selectedEmployee == null) return;
+    final employeeId = _selectedEmployee!['employee_id'] as String;
+
+    setState(() => _startingOnboarding = true);
+    try {
+      final result = await _api.autoStartOnboarding(employeeId);
+      if (!mounted) return;
+      final orientation = result.orientation;
+      final banner = orientation == null
+          ? 'No free orientation slot found in the next 14 days — schedule manually.'
+          : 'Orientation auto-booked for ${orientation['date']} at ${orientation['start_time']}.';
+
+      await showDialog<void>(
+        context: context,
+        builder: (_) => _EmailStepDialog(
+          apiBaseUrl: widget.apiBaseUrl,
+          hrToken: widget.hrToken,
+          employeeId: employeeId,
+          title: 'Welcome email',
+          initialSubject: result.subject,
+          initialBody: result.body,
+          banner: banner,
+        ),
+      );
+      if (mounted) await _loadCandidatesThenFlow();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.toString()), backgroundColor: SelmsColors.rose));
+    } finally {
+      if (mounted) setState(() => _startingOnboarding = false);
+    }
+  }
+
   void _openEmailPopup(OnboardingFlowNode node) {
     if (_selectedEmployee == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -629,6 +670,24 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   ),
                 ),
                 if (_selectedEmployee != null) ...[
+                  if (_selectedEmployee!['onboarding_started'] != true) ...[
+                    ElevatedButton.icon(
+                      onPressed: _startingOnboarding ? null : _startOnboardingAuto,
+                      icon: _startingOnboarding
+                          ? const SizedBox(
+                              width: 14, height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.auto_awesome, size: 14),
+                      label: Text(_startingOnboarding ? 'Starting…' : 'Start onboarding',
+                          style: const TextStyle(fontSize: 12)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: SelmsColors.ink,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
                   OutlinedButton(
                     onPressed: () {
                       Navigator.of(context).push(
@@ -705,12 +764,25 @@ class _EmailStepDialog extends StatefulWidget {
     required this.hrToken,
     required this.employeeId,
     required this.title,
+    this.initialSubject,
+    this.initialBody,
+    this.banner,
   });
 
   final String apiBaseUrl;
   final String hrToken;
   final String employeeId;
   final String title;
+
+  /// When set (from the one-click "Start Onboarding" automation), the
+  /// dialog shows this draft immediately instead of fetching its own —
+  /// avoids a second, different AI call right after the first.
+  final String? initialSubject;
+  final String? initialBody;
+
+  /// Optional note shown above the draft, e.g. confirming the
+  /// auto-booked orientation slot.
+  final String? banner;
 
   @override
   State<_EmailStepDialog> createState() => _EmailStepDialogState();
@@ -730,7 +802,13 @@ class _EmailStepDialogState extends State<_EmailStepDialog> {
   @override
   void initState() {
     super.initState();
-    _loadDraft();
+    if (widget.initialSubject != null && widget.initialBody != null) {
+      _subjectCtrl.text = widget.initialSubject!;
+      _bodyCtrl.text = widget.initialBody!;
+      _loadingDraft = false;
+    } else {
+      _loadDraft();
+    }
   }
 
   @override
@@ -823,6 +901,19 @@ class _EmailStepDialogState extends State<_EmailStepDialog> {
               const SizedBox(height: 4),
               const Text('AI-drafted — review before sending.',
                   style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
+              if (widget.banner != null) ...[
+                const SizedBox(height: 10),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: SelmsColors.statusActiveBg,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(widget.banner!,
+                      style: const TextStyle(fontSize: 11.5, color: SelmsColors.statusActiveText)),
+                ),
+              ],
               const SizedBox(height: 14),
               if (_loadingDraft)
                 const Padding(

@@ -102,6 +102,25 @@ class ApiClient {
     return (data['candidates'] as List).cast<Map<String, dynamic>>();
   }
 
+  /// One-click automation: drafts the welcome email and auto-books an
+  /// orientation slot in a single call, marking onboarding as started.
+  /// Does not send the email — the caller still shows [subject]/[body]
+  /// for review before calling sendOnboardingEmail.
+  Future<({String subject, String body, Map<String, dynamic>? orientation})> autoStartOnboarding(
+      String employeeId) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/onboarding/$employeeId/auto-start'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    return (
+      subject: data['subject'] as String,
+      body: data['body'] as String,
+      orientation: data['orientation'] as Map<String, dynamic>?,
+    );
+  }
+
   Future<Map<String, String>> draftOnboardingEmail(String employeeId, {String instruction = ''}) async {
     final res = await http.post(
       Uri.parse('$baseUrl/api/onboarding/$employeeId/draft-email'),
