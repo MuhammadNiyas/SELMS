@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import '../models/employee.dart';
 import '../models/equipment.dart';
 import '../models/employee_self_service.dart';
+import '../models/chat.dart';
 
 class ApiException implements Exception {
   ApiException(this.message);
@@ -569,6 +570,38 @@ class ApiClient {
       body: jsonEncode({'step': step}),
     );
     if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+  }
+
+  // ---------- AI chatbot ----------
+  //
+  // Both grounded in a fresh server-side snapshot of real data on every
+  // call (see _hr_chat_snapshot/_employee_chat_snapshot on the backend) —
+  // history is sent back each time since nothing is persisted server-side.
+
+  Future<String> hrChat(String message, List<ChatTurn> history) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/hr/chat'),
+      headers: _headers,
+      body: jsonEncode({
+        'message': message,
+        'history': history.map((t) => t.toJson()).toList(),
+      }),
+    );
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    return (jsonDecode(res.body) as Map<String, dynamic>)['reply'] as String;
+  }
+
+  Future<String> employeeChat(String message, List<ChatTurn> history) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/employee/me/chat'),
+      headers: _headers,
+      body: jsonEncode({
+        'message': message,
+        'history': history.map((t) => t.toJson()).toList(),
+      }),
+    );
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    return (jsonDecode(res.body) as Map<String, dynamic>)['reply'] as String;
   }
 
   String _extractMessage(http.Response res) {

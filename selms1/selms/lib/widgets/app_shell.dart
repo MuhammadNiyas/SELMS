@@ -6,12 +6,14 @@
 
 import 'package:flutter/material.dart';
 import '../theme/selms_colors.dart';
+import '../services/api_client.dart';
 import '../screens/selms_login_screen.dart';
 import '../screens/dashboard_screen.dart';
 import '../screens/employee_directory_screen.dart';
 import '../screens/onboarding_screen.dart';
 import '../screens/offboarding_screen.dart';
 import '../screens/smart_schedule_screen.dart';
+import 'chat_panel.dart';
 
 enum SelmsRoute { dashboard, employees, onboarding, offboarding, smartSchedule }
 
@@ -35,6 +37,35 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   bool _collapsed = false;
+  bool _chatOpen = false;
+
+  void _openChat() {
+    if (_chatOpen) return;
+    setState(() => _chatOpen = true);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (_) => Dialog(
+        alignment: Alignment.bottomRight,
+        insetPadding: const EdgeInsets.only(right: 24, bottom: 24),
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        child: SizedBox(
+          width: 340,
+          height: 460,
+          child: ChatPanel(
+            title: 'SELMS Admin Assistant',
+            hint: "Hi! I'm your SELMS Admin Assistant. How can I help you today?",
+            suggestions: const ['overdue', 'offboarding', 'equipment', 'reminder'],
+            onSend: (message, history) =>
+                ApiClient(baseUrl: widget.apiBaseUrl, hrToken: widget.hrToken).hrChat(message, history),
+          ),
+        ),
+      ),
+    ).then((_) {
+      if (mounted) setState(() => _chatOpen = false);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -83,6 +114,26 @@ class _AppShellState extends State<AppShell> {
                 ),
               ),
             ),
+          Positioned(
+            bottom: 24,
+            right: 24,
+            child: InkWell(
+              onTap: _openChat,
+              borderRadius: BorderRadius.circular(28),
+              child: Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: SelmsColors.ink,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 10, offset: const Offset(0, 3)),
+                  ],
+                ),
+                child: const Icon(Icons.smart_toy_outlined, size: 22, color: Colors.white),
+              ),
+            ),
+          ),
         ],
       ),
     );

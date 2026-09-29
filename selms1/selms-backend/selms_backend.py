@@ -194,6 +194,45 @@ def _welcome_email_html(body_text: str, confirm_url: str) -> str:
     """
 
 
+# ---------- AI chatbot (HR + Employee only — not IT, per the report's own
+# functional requirements table) ----------
+#
+# Both endpoints below use this same helper. Unlike draft_welcome_email,
+# there's no sensible template fallback for open-ended conversation, so
+# failures are raised and turned into a clear error message instead.
+
+def _chat_completion(system_prompt: str, messages: list) -> str:
+    if not ANTHROPIC_API_KEY:
+        raise RuntimeError("ANTHROPIC_API_KEY is not configured on the server.")
+
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=_json.dumps({
+            "model": ANTHROPIC_MODEL,
+            "max_tokens": 500,
+            "system": system_prompt,
+            "messages": messages,
+        }).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=20) as res:
+        data = _json.loads(res.read())
+    return data["content"][0]["text"].strip()
+
+
+EMPLOYEE_FAQ = """
+Leave: Apply through HR directly for now - a self-service leave form isn't built into SELMS yet, so email or message HR with your requested dates.
+Medical claim: Download the claim form from the Documents tab, fill in your details, attach receipts, and submit to HR. Claims are processed within 7 working days.
+Equipment collection: Check the Onboarding tab's "Collect IT Equipment" checklist item - IT will mark it complete once your equipment is ready and handed over.
+VPN / remote access: Contact IT directly to have VPN access set up on your device; this isn't self-service yet.
+Orientation: HR schedules your orientation session automatically once your onboarding starts; check the Onboarding tab for the date once it's confirmed.
+""".strip()
+
+
 # ---------- Auth ----------
 
 @app.post("/api/auth/login")
@@ -1228,6 +1267,74 @@ def onboarding_mark_step(employee_id):
     return jsonify({"message": "Updated."}), 200
 
 
+def _hr_chat_snapshot():
+    """A fresh read of real operational counts, handed to Claude as
+    context so the HR chatbot's answers reflect what's actually in the
+    database right now rather than being guessed."""
+    onboarding_active = list(users.find({"role": "employee", "onboarding_status.started": True}))
+    onboarding_pending_email = sum(
+        1 for e in onboarding_active if not e.get("onboarding_status", {}).get("welcome_email_sent"))
+    onboarding_pending_orientation = sum(
+        1 for e in onboarding_active if not e.get("onboarding_status", {}).get("orientation_scheduled"))
+    onboarding_pending_equipment = sum(
+        1 for e in onboarding_active if not e.get("onboarding_status", {}).get("it_equipment_ready"))
+
+    offboarding_active = list(users.find({"role": "employee", "offboarding_status.started": True}))
+    offboarding_pending_exit_interview = sum(
+        1 for e in offboarding_active if not e.get("offboarding_status", {}).get("exit_interview_scheduled"))
+    offboarding_pending_access_revoke = sum(
+        1 for e in offboarding_active if not e.get("offboarding_status", {}).get("access_revoked"))
+
+    equip_total = equipment.count_documents({})
+    equip_available = equipment.count_documents({"status": "available"})
+    equip_assigned = equipment.count_documents({"status": "assigned"})
+    equip_returned = equipment.count_documents({"status": "returned"})
+
+    onboarding_names = [e["full_name"] for e in onboarding_active] or ["none"]
+    offboarding_names = [e["full_name"] for e in offboarding_active] or ["none"]
+
+    return (
+        f"Active onboarding: {len(onboarding_active)} employee(s) - {onboarding_names}.\n"
+        f"  Pending welcome email: {onboarding_pending_email}. "
+        f"Pending orientation: {onboarding_pending_orientation}. "
+        f"Pending equipment: {onboarding_pending_equipment}.\n"
+        f"Active offboarding: {len(offboarding_active)} employee(s) - {offboarding_names}.\n"
+        f"  Pending exit interview: {offboarding_pending_exit_interview}. "
+        f"Pending access revocation: {offboarding_pending_access_revoke}.\n"
+        f"Equipment - total: {equip_total}, available: {equip_available}, "
+        f"assigned: {equip_assigned}, returned: {equip_returned}."
+    )
+
+
+@app.post("/api/hr/chat")
+@require_hr
+def hr_chat():
+    body = request.get_json(silent=True) or {}
+    message = (body.get("message") or "").strip()
+    history = body.get("history") or []
+    if not message:
+        return jsonify({"message": "message is required."}), 400
+
+    system_prompt = (
+        "You are the SELMS Admin Assistant, helping an HR staff member inside the "
+        "Smart Employee Lifecycle Management System. Answer only using the live "
+        "system snapshot below - never invent employee names, counts, or statuses "
+        "that aren't in it. If asked something the snapshot doesn't cover, say you "
+        "don't have that information rather than guessing. Keep answers short and "
+        "direct.\n\nCurrent system snapshot:\n" + _hr_chat_snapshot()
+    )
+    messages = [{"role": m["role"], "content": m["content"]}
+                for m in history if m.get("role") in ("user", "assistant")]
+    messages.append({"role": "user", "content": message})
+
+    try:
+        reply = _chat_completion(system_prompt, messages)
+    except Exception as exc:
+        return jsonify({"message": f"Could not reach the assistant: {exc}"}), 502
+
+    return jsonify({"reply": reply}), 200
+
+
 # ---------- Employee self-service ----------
 #
 # Everything an employee's own mobile session can see or do about
@@ -1352,6 +1459,51 @@ def employee_update_own_profile():
 
     users.update_one({"_id": g.current_employee["_id"]}, {"$set": updates})
     return jsonify({"message": "Profile updated."}), 200
+
+
+def _employee_chat_snapshot(employee_doc):
+    status = employee_doc.get("onboarding_status") or {}
+    signed = employee_doc.get("signed_documents") or {}
+    return (
+        f"Employee: {employee_doc['full_name']} "
+        f"({employee_doc.get('job_title')}, {employee_doc.get('department')}).\n"
+        f"Onboarding started: {status.get('started', False)}.\n"
+        f"Welcome email sent: {status.get('welcome_email_sent', False)}.\n"
+        f"Orientation scheduled: {status.get('orientation_scheduled', False)}.\n"
+        f"IT equipment ready: {status.get('it_equipment_ready', False)}.\n"
+        f"Documents signed: {len(signed)} of {len(COMPANY_DOCUMENTS)}.\n"
+        f"Profile photo uploaded: {bool(employee_doc.get('profile_image_url'))}."
+    )
+
+
+@app.post("/api/employee/me/chat")
+@require_employee
+def employee_chat():
+    body = request.get_json(silent=True) or {}
+    message = (body.get("message") or "").strip()
+    history = body.get("history") or []
+    if not message:
+        return jsonify({"message": "message is required."}), 400
+
+    system_prompt = (
+        "You are SmartBot, an assistant for employees inside the Smart Employee "
+        "Lifecycle Management System. Answer using the employee's own status below "
+        "and the company FAQ knowledge provided. Never invent policies or statuses "
+        "that aren't given to you. If something isn't covered, say to contact HR or "
+        "IT directly. Keep answers short and friendly.\n\n"
+        "This employee's own status:\n" + _employee_chat_snapshot(g.current_employee) + "\n\n"
+        "Company FAQ knowledge:\n" + EMPLOYEE_FAQ
+    )
+    messages = [{"role": m["role"], "content": m["content"]}
+                for m in history if m.get("role") in ("user", "assistant")]
+    messages.append({"role": "user", "content": message})
+
+    try:
+        reply = _chat_completion(system_prompt, messages)
+    except Exception as exc:
+        return jsonify({"message": f"Could not reach the assistant: {exc}"}), 502
+
+    return jsonify({"reply": reply}), 200
 
 
 @app.get("/api/employee/me/notifications")

@@ -1,10 +1,11 @@
 // lib/screens/employee_home_screen.dart
 //
 // Employee's own mobile-style home: a top tab bar over a shared header.
-// Base tabs are Onboarding / Documents / Alerts / Profile (matches the
-// report's fig 3.28 layout, minus Chat until there's a chatbot backend).
-// An Offboarding tab is inserted only once HR has actually initiated
-// offboarding for this employee — most employees never see it.
+// Base tabs are Onboarding / Documents / Chat / Alerts / Profile (matches
+// the report's fig 3.28 layout — Chat is SmartBot only, no "Talk to
+// HR/IT" since no messaging backend exists). An Offboarding tab is
+// inserted only once HR has actually initiated offboarding for this
+// employee — most employees never see it.
 
 import 'package:flutter/material.dart';
 import '../models/employee.dart';
@@ -15,6 +16,7 @@ import 'selms_login_screen.dart';
 import 'employee_onboarding_screen.dart';
 import 'employee_offboarding_screen.dart';
 import 'employee_documents_screen.dart';
+import 'employee_chat_screen.dart';
 import 'employee_notifications_screen.dart';
 import 'employee_profile_screen.dart';
 
@@ -76,7 +78,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen>
     }
   }
 
-  int get _tabCount => _offboardingStarted ? 5 : 4;
+  int get _tabCount => _offboardingStarted ? 6 : 5;
 
   Future<void> _refreshUnreadCount() async {
     try {
@@ -148,6 +150,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen>
       const Tab(text: 'Onboarding'),
       if (_offboardingStarted) const Tab(text: 'Offboarding'),
       const Tab(text: 'Documents'),
+      const Tab(text: 'Chat'),
       Tab(child: _alertsTabLabel()),
       const Tab(text: 'Profile'),
     ];
@@ -156,6 +159,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen>
       EmployeeOnboardingScreen(api: _api, fullName: _fullName),
       if (_offboardingStarted) EmployeeOffboardingScreen(api: _api),
       EmployeeDocumentsScreen(api: _api),
+      EmployeeChatScreen(api: _api),
       EmployeeNotificationsScreen(api: _api, onRead: _refreshUnreadCount),
       EmployeeProfileScreen(api: _api, onProfileChanged: _refreshName),
     ];
