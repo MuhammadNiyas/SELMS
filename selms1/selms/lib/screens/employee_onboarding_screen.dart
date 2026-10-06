@@ -40,7 +40,7 @@ class _EmployeeOnboardingScreenState extends State<EmployeeOnboardingScreen> {
         'welcome_email' => 'Sent automatically once HR starts your onboarding.',
         'documents_signed' => 'Sign every document on the Documents tab.',
         'orientation' => 'HR will schedule this and it will update here.',
-        'it_equipment' => 'IT will mark this once your equipment is handed over.',
+        'it_equipment' => 'Marked automatically once IT assigns your equipment.',
         'profile_setup' => 'Upload a profile photo on the Profile tab.',
         _ => '',
       };

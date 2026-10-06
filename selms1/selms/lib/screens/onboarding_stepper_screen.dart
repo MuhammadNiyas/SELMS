@@ -3,9 +3,10 @@
 // Click any step to see its detail. Green = done, amber = pending, gray =
 // not started. "Email confirmed" flips automatically when the employee
 // clicks the link in their inbox (GET /api/onboarding/confirm/<token> on
-// the backend — no login required on their end). The last two steps are
-// manually marked by HR since IT equipment tracking and Smart Scheduling
-// aren't built yet.
+// the backend — no login required on their end). "IT equipment ready"
+// is computed live from real equipment assignment records, not manual.
+// "Orientation scheduled" stays manually markable as a fallback for when
+// auto-booking (Start onboarding) found no free slot.
 
 import 'package:flutter/material.dart';
 import '../services/api_client.dart';
@@ -104,9 +105,8 @@ class _OnboardingStepperScreenState extends State<OnboardingStepperScreen> {
         title: 'IT equipment ready',
         state: s['it_equipment_ready'] == true ? _StepState.done : _StepState.pending,
         detail: s['it_equipment_ready'] == true
-            ? 'Marked ready on ${s['it_equipment_ready_at']}.'
-            : 'Not marked ready yet.',
-        manualStep: 'it_equipment_ready',
+            ? 'Equipment assigned on ${s['it_equipment_ready_at']}.'
+            : 'Waiting for IT to assign the requested equipment.',
       ),
       _Step(
         title: 'Orientation scheduled',

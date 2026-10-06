@@ -1076,11 +1076,12 @@ def delete_employee(employee_id):
 # A deliberately separate, HR-triggered workflow — Employees/registration
 # does not auto-start this. HR picks a registered employee on the
 # Onboarding tab, reviews an AI-drafted (or template) welcome email, sends
-# it, and tracks progress via the confirm link the employee clicks plus two
-# manually-marked steps (IT equipment, orientation) until those modules
-# exist as real features.
+# it, and tracks progress via the confirm link the employee clicks plus one
+# manually-marked step (orientation, as a fallback if auto-booking finds no
+# free slot). IT equipment readiness is NOT manual — see
+# _compute_it_equipment_ready below.
 
-ONBOARDING_MANUAL_STEPS = {"it_equipment_ready", "orientation_scheduled"}
+ONBOARDING_MANUAL_STEPS = {"orientation_scheduled"}
 
 
 def _default_onboarding_status():
@@ -1092,6 +1093,22 @@ def _default_onboarding_status():
         "it_equipment_ready": False, "it_equipment_ready_at": None,
         "orientation_scheduled": False, "orientation_scheduled_at": None,
     }
+
+
+def _compute_it_equipment_ready(employee_doc):
+    """Whether this employee's requested equipment has actually been
+    handed over by IT — computed live from real equipment assignment
+    records instead of a manual flag someone has to remember to tick, so
+    it can never drift out of sync with what IT actually did. "Ready"
+    means at least as many items are currently assigned to them as they
+    asked for; employees who didn't request equipment are trivially ready."""
+    needed = employee_doc.get("equipment_needed") or []
+    assigned_items = list(equipment.find({
+        "assigned_to_employee_id": employee_doc["employee_id"], "status": "assigned",
+    }))
+    ready = (not needed) or (len(assigned_items) >= len(needed))
+    ready_at = max((item["assigned_date"] for item in assigned_items), default=None) if ready and assigned_items else None
+    return ready, ready_at
 
 
 @app.get("/api/onboarding/candidates")
@@ -1158,6 +1175,26 @@ def onboarding_auto_start(employee_id):
         updates["onboarding_status.orientation_scheduled_at"] = now
 
     users.update_one({"employee_id": employee_id}, {"$set": updates})
+
+    # Notify IT the moment onboarding starts, instead of relying on
+    # someone remembering to tell them — a system-authored message into
+    # this employee's IT thread, visible wherever Talk to IT already
+    # shows up (IT's Messages inbox, unread badge included).
+    equipment_needed = doc.get("equipment_needed") or []
+    equipment_line = ", ".join(equipment_needed) if equipment_needed else "none listed"
+    messages.insert_one({
+        "employee_id": employee_id,
+        "employee_name": doc["full_name"],
+        "target_role": "it",
+        "sender_role": "system",
+        "sender_name": "SELMS System",
+        "content": (
+            f"New hire: {doc['full_name']} — {doc['job_title']}, {doc['department']}. "
+            f"Equipment needed: {equipment_line}. Start date: {doc.get('hire_date') or 'TBC'}. "
+            f"Please prepare before then."
+        ),
+        "created_at": now,
+    })
 
     return jsonify({
         "subject": draft["subject"],
@@ -1243,7 +1280,8 @@ def onboarding_status(employee_id):
     doc = users.find_one({"employee_id": employee_id, "role": "employee"})
     if not doc:
         return jsonify({"message": "Employee not found."}), 404
-    status = doc.get("onboarding_status") or _default_onboarding_status()
+    status = dict(doc.get("onboarding_status") or _default_onboarding_status())
+    status["it_equipment_ready"], status["it_equipment_ready_at"] = _compute_it_equipment_ready(doc)
     return jsonify(status), 200
 
 
@@ -1278,7 +1316,7 @@ def _hr_chat_snapshot():
     onboarding_pending_orientation = sum(
         1 for e in onboarding_active if not e.get("onboarding_status", {}).get("orientation_scheduled"))
     onboarding_pending_equipment = sum(
-        1 for e in onboarding_active if not e.get("onboarding_status", {}).get("it_equipment_ready"))
+        1 for e in onboarding_active if not _compute_it_equipment_ready(e)[0])
 
     offboarding_active = list(users.find({"role": "employee", "offboarding_status.started": True}))
     offboarding_pending_exit_interview = sum(
@@ -1390,6 +1428,7 @@ def employee_checklist():
     has_photo = bool(g.current_employee.get("profile_image_url"))
     signed = g.current_employee.get("signed_documents") or {}
     all_signed = len(signed) >= len(COMPANY_DOCUMENTS)
+    equipment_ready, equipment_ready_at = _compute_it_equipment_ready(g.current_employee)
 
     items = [
         {"id": "welcome_email", "label": "Welcome Email Received",
@@ -1399,7 +1438,7 @@ def employee_checklist():
         {"id": "orientation", "label": "Orientation Session",
          "done": status.get("orientation_scheduled", False), "done_at": status.get("orientation_scheduled_at")},
         {"id": "it_equipment", "label": "Collect IT Equipment",
-         "done": status.get("it_equipment_ready", False), "done_at": status.get("it_equipment_ready_at")},
+         "done": equipment_ready, "done_at": equipment_ready_at},
         {"id": "profile_setup", "label": "Complete Profile Setup",
          "done": has_photo, "done_at": None},
     ]
@@ -1591,7 +1630,7 @@ def _staff_inbox(target_role, read_marker_field):
         read_marker = (emp or {}).get(read_marker_field)
         unread = sum(
             1 for m in thread["messages"]
-            if m["sender_role"] == "employee" and (not read_marker or m["created_at"] > read_marker)
+            if m["sender_role"] in ("employee", "system") and (not read_marker or m["created_at"] > read_marker)
         )
         last = thread["messages"][-1]
         rows.append({
