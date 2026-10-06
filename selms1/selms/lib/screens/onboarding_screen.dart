@@ -318,9 +318,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       final result = await _api.autoStartOnboarding(employeeId);
       if (!mounted) return;
       final orientation = result.orientation;
-      final banner = orientation == null
-          ? 'No free orientation slot found in the next 14 days — schedule manually.'
-          : 'Orientation auto-booked for ${orientation['date']} at ${orientation['start_time']}.';
+      final scheduleLine = !result.scheduleEnabled
+          ? "Orientation not scheduled — 'Schedule orientation' step removed from this employee's flow."
+          : orientation == null
+              ? 'No free orientation slot found in the next 14 days — schedule manually.'
+              : 'Orientation auto-booked for ${orientation['date']} at ${orientation['start_time']}.';
+      final itLine = result.itNotified
+          ? 'IT notified.'
+          : "IT not notified — 'Notify IT' step removed from this employee's flow.";
+      final banner = '$scheduleLine\n$itLine';
 
       await showDialog<void>(
         context: context,

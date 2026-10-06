@@ -1133,23 +1133,26 @@ def onboarding_candidates():
 @require_hr
 def onboarding_auto_start(employee_id):
     """The one-click automation entry point: drafts the welcome email via
-    Claude and auto-books an orientation slot via the same conflict-checker
-    behind Smart Scheduling — both in one call, instead of HR doing them
-    as two separate manual steps. Marks onboarding as started immediately
-    so progress tracking (and the employee's own checklist/notifications)
-    begins right away. Deliberately does NOT send the email itself — HR
-    still reviews the draft this returns and calls the existing
-    /send-email endpoint when ready, so nothing goes to a new hire's
-    inbox without a human looking at it first."""
+    Claude, then runs each remaining step ONLY IF that step's node is
+    still present in this employee's own flow diagram — HR can delete a
+    node (e.g. "Notify IT") from the flow-chart builder to turn that step
+    off for real, instead of the diagram being purely decorative. Marks
+    onboarding as started immediately so progress tracking begins right
+    away. Deliberately does NOT send the email itself — HR still reviews
+    the draft this returns and calls the existing /send-email endpoint
+    when ready, so nothing goes to a new hire's inbox without a human
+    looking at it first. ("Send welcome email" has no on/off switch via
+    the diagram for that reason — there'd be nothing left to review.)"""
     doc = users.find_one({"employee_id": employee_id, "role": "employee"})
     if not doc:
         return jsonify({"message": "Employee not found."}), 404
+
+    flow_labels = _flow_node_labels(_employee_flow_nodes(employee_id))
 
     draft = draft_welcome_email(
         doc["full_name"], doc["job_title"], doc["department"], doc["work_email"], "",
     )
 
-    slot = _find_next_available_slot(DEFAULT_SESSION_MINUTES)
     now = datetime.now(timezone.utc).isoformat()
     updates = {
         "onboarding_status.started": True,
@@ -1158,6 +1161,9 @@ def onboarding_auto_start(employee_id):
     existing_status = doc.get("onboarding_status") or {}
     if not existing_status.get("started"):
         updates["onboarding_status.started_at"] = now
+
+    schedule_enabled = "Schedule orientation" in flow_labels
+    slot = _find_next_available_slot(DEFAULT_SESSION_MINUTES) if schedule_enabled else None
 
     if slot is not None:
         bookings.insert_one({
@@ -1176,30 +1182,33 @@ def onboarding_auto_start(employee_id):
 
     users.update_one({"employee_id": employee_id}, {"$set": updates})
 
-    # Notify IT the moment onboarding starts, instead of relying on
-    # someone remembering to tell them — a system-authored message into
-    # this employee's IT thread, visible wherever Talk to IT already
-    # shows up (IT's Messages inbox, unread badge included).
-    equipment_needed = doc.get("equipment_needed") or []
-    equipment_line = ", ".join(equipment_needed) if equipment_needed else "none listed"
-    messages.insert_one({
-        "employee_id": employee_id,
-        "employee_name": doc["full_name"],
-        "target_role": "it",
-        "sender_role": "system",
-        "sender_name": "SELMS System",
-        "content": (
-            f"New hire: {doc['full_name']} — {doc['job_title']}, {doc['department']}. "
-            f"Equipment needed: {equipment_line}. Start date: {doc.get('hire_date') or 'TBC'}. "
-            f"Please prepare before then."
-        ),
-        "created_at": now,
-    })
+    # Notify IT — only if the "Notify IT" node is still in this
+    # employee's flow. Delete it from the diagram and this is skipped for
+    # real, not just visually.
+    it_notified = "Notify IT" in flow_labels
+    if it_notified:
+        equipment_needed = doc.get("equipment_needed") or []
+        equipment_line = ", ".join(equipment_needed) if equipment_needed else "none listed"
+        messages.insert_one({
+            "employee_id": employee_id,
+            "employee_name": doc["full_name"],
+            "target_role": "it",
+            "sender_role": "system",
+            "sender_name": "SELMS System",
+            "content": (
+                f"New hire: {doc['full_name']} — {doc['job_title']}, {doc['department']}. "
+                f"Equipment needed: {equipment_line}. Start date: {doc.get('hire_date') or 'TBC'}. "
+                f"Please prepare before then."
+            ),
+            "created_at": now,
+        })
 
     return jsonify({
         "subject": draft["subject"],
         "body": draft["body"],
-        "orientation": slot,  # null if no free slot was found in the next 14 days
+        "orientation": slot,  # null if skipped (node removed) or no free slot found
+        "schedule_enabled": schedule_enabled,
+        "it_notified": it_notified,
     }), 200
 
 
@@ -1996,6 +2005,33 @@ def save_flow_template():
     return jsonify({"message": "Template saved."}), 200
 
 
+def _employee_flow_nodes(employee_id):
+    """Shared by the flow-builder routes and the auto-start automation
+    below — same copy-on-first-open logic either way, so reading an
+    employee's flow never produces a different answer depending on which
+    endpoint asked."""
+    doc = onboarding_flows.find_one({"_id": employee_id})
+    if not doc:
+        template = onboarding_flows.find_one({"_id": "template"})
+        nodes = template["nodes"] if template else _default_flow_nodes()
+        doc = {"_id": employee_id, "nodes": nodes}
+        onboarding_flows.insert_one(doc)
+    return doc["nodes"]
+
+
+def _flow_node_labels(nodes):
+    """Flattened set of every node's label in this flow, including ones
+    nested inside condition branches, so a step can be looked up by name
+    regardless of where HR placed it in the diagram."""
+    labels = set()
+    for n in nodes:
+        labels.add(n.get("label"))
+        if n.get("type") == "condition":
+            labels |= _flow_node_labels(n.get("branch_a") or [])
+            labels |= _flow_node_labels(n.get("branch_b") or [])
+    return labels
+
+
 @app.get("/api/onboarding-flows/employee/<employee_id>")
 @require_hr
 def get_employee_flow(employee_id):
@@ -2003,13 +2039,7 @@ def get_employee_flow(employee_id):
     if not emp:
         return jsonify({"message": "Employee not found."}), 404
 
-    doc = onboarding_flows.find_one({"_id": employee_id})
-    if not doc:
-        template = onboarding_flows.find_one({"_id": "template"})
-        nodes = template["nodes"] if template else _default_flow_nodes()
-        doc = {"_id": employee_id, "nodes": nodes}
-        onboarding_flows.insert_one(doc)
-    return jsonify({"nodes": doc["nodes"]}), 200
+    return jsonify({"nodes": _employee_flow_nodes(employee_id)}), 200
 
 
 @app.put("/api/onboarding-flows/employee/<employee_id>")
