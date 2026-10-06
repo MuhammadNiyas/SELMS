@@ -13,16 +13,25 @@ class ChatMessage {
     required this.senderName,
     required this.content,
     required this.createdAt,
+    this.accepted = false,
+    this.acceptedBy,
+    this.acceptedAt,
   });
 
   final String id;
   final String employeeId;
   final String employeeName;
   final String targetRole; // 'hr' | 'it'
-  final String senderRole; // 'employee' | 'hr' | 'it'
+  final String senderRole; // 'employee' | 'hr' | 'it' | 'system'
   final String senderName;
   final String content;
   final String createdAt; // ISO string
+
+  /// Only meaningful on sender_role == 'system' messages (e.g. the
+  /// onboarding equipment notification) — IT explicitly acknowledging it.
+  final bool accepted;
+  final String? acceptedBy;
+  final String? acceptedAt;
 
   factory ChatMessage.fromJson(Map<String, dynamic> j) => ChatMessage(
         id: j['id'] as String,
@@ -30,6 +39,9 @@ class ChatMessage {
         employeeName: j['employee_name'] as String,
         targetRole: j['target_role'] as String,
         senderRole: j['sender_role'] as String,
+        accepted: j['accepted'] as bool? ?? false,
+        acceptedBy: j['accepted_by'] as String?,
+        acceptedAt: j['accepted_at'] as String?,
         senderName: j['sender_name'] as String,
         content: j['content'] as String,
         createdAt: j['created_at'] as String,

@@ -1578,6 +1578,11 @@ def _serialize_message(doc):
         "sender_name": doc["sender_name"],
         "content": doc["content"],
         "created_at": doc["created_at"],
+        # Only meaningful for sender_role == "system" (e.g. the onboarding
+        # equipment notification) - a human message is never "accepted".
+        "accepted": doc.get("accepted", False),
+        "accepted_by": doc.get("accepted_by"),
+        "accepted_at": doc.get("accepted_at"),
     }
 
 
@@ -1737,6 +1742,33 @@ def it_send_message(employee_id):
     result = messages.insert_one(doc)
     doc["_id"] = result.inserted_id
     return jsonify(_serialize_message(doc)), 201
+
+
+@app.post("/api/it/messages/<message_id>/accept")
+@require_it
+def it_accept_message(message_id):
+    """IT explicitly acknowledging a system-authored notification (e.g.
+    'prepare equipment for this new hire') - a real action, not just
+    reading the thread. Only meaningful on sender_role == 'system'
+    messages; accepting a human message would be a no-op anyone could
+    confuse with actually replying, so it's rejected instead."""
+    try:
+        doc = messages.find_one({"_id": ObjectId(message_id)})
+    except Exception:
+        return jsonify({"message": "Invalid message id."}), 400
+    if not doc:
+        return jsonify({"message": "Message not found."}), 404
+    if doc.get("sender_role") != "system":
+        return jsonify({"message": "Only system notifications can be accepted."}), 400
+
+    now = datetime.now(timezone.utc).isoformat()
+    messages.update_one({"_id": doc["_id"]}, {"$set": {
+        "accepted": True,
+        "accepted_by": g.current_user.get("full_name") or "IT",
+        "accepted_at": now,
+    }})
+    doc["accepted"], doc["accepted_by"], doc["accepted_at"] = True, g.current_user.get("full_name") or "IT", now
+    return jsonify(_serialize_message(doc)), 200
 
 
 @app.get("/api/employee/me/notifications")

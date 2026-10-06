@@ -162,6 +162,7 @@ class _ItMessagesScreenState extends State<ItMessagesScreen> {
                     mySenderRole: 'it',
                     fetchMessages: () => _api.getItThread(_selectedEmployeeId!),
                     sendMessage: (content) => _api.sendItMessage(_selectedEmployeeId!, content),
+                    onAccept: (message) => _api.acceptMessage(message.id),
                   ),
           ),
         ),

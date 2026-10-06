@@ -16,12 +16,19 @@ class MessageThreadPanel extends StatefulWidget {
     required this.fetchMessages,
     required this.sendMessage,
     this.emptyHint = 'No messages yet — say hello.',
+    this.onAccept,
   });
 
   final String mySenderRole; // 'employee' | 'hr' | 'it'
   final Future<List<ChatMessage>> Function() fetchMessages;
   final Future<void> Function(String content) sendMessage;
   final String emptyHint;
+
+  /// When set, system-authored messages (sender_role == 'system') show
+  /// an "Accept" button that calls this. Only wired on IT's own Messages
+  /// screen — leave null anywhere accepting wouldn't make sense (HR's
+  /// inbox, the employee's own Talk to HR/IT tabs).
+  final Future<void> Function(ChatMessage message)? onAccept;
 
   @override
   State<MessageThreadPanel> createState() => _MessageThreadPanelState();
@@ -34,6 +41,7 @@ class _MessageThreadPanelState extends State<MessageThreadPanel> {
   bool _loading = true;
   bool _sending = false;
   String? _error;
+  String? _acceptingId;
   Timer? _pollTimer;
 
   @override
@@ -82,6 +90,21 @@ class _MessageThreadPanelState extends State<MessageThreadPanel> {
     });
   }
 
+  Future<void> _accept(ChatMessage message) async {
+    final onAccept = widget.onAccept;
+    if (onAccept == null || _acceptingId != null) return;
+    setState(() => _acceptingId = message.id);
+    try {
+      await onAccept(message);
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _acceptingId = null);
+    }
+  }
+
   Future<void> _send() async {
     final text = _inputCtrl.text.trim();
     if (text.isEmpty || _sending) return;
@@ -120,6 +143,8 @@ class _MessageThreadPanelState extends State<MessageThreadPanel> {
                       itemBuilder: (context, i) {
                         final m = _messages[i];
                         final isMine = m.senderRole == widget.mySenderRole;
+                        final isSystem = m.senderRole == 'system';
+                        final showAccept = widget.onAccept != null && isSystem;
                         return Align(
                           alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
                           child: Container(
@@ -127,7 +152,9 @@ class _MessageThreadPanelState extends State<MessageThreadPanel> {
                             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                             constraints: const BoxConstraints(maxWidth: 320),
                             decoration: BoxDecoration(
-                              color: isMine ? SelmsColors.ink : SelmsColors.accentBg,
+                              color: isSystem
+                                  ? SelmsColors.statusOnboardingBg
+                                  : (isMine ? SelmsColors.ink : SelmsColors.accentBg),
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Column(
@@ -140,7 +167,32 @@ class _MessageThreadPanelState extends State<MessageThreadPanel> {
                                 Text(m.content,
                                     style: TextStyle(
                                         fontSize: 12.5,
-                                        color: isMine ? Colors.white : SelmsColors.textPrimary)),
+                                        color: isSystem
+                                            ? SelmsColors.statusOnboardingText
+                                            : (isMine ? Colors.white : SelmsColors.textPrimary))),
+                                if (showAccept) ...[
+                                  const SizedBox(height: 6),
+                                  if (m.accepted)
+                                    Text('Accepted by ${m.acceptedBy} ✓',
+                                        style: const TextStyle(
+                                            fontSize: 10.5,
+                                            fontWeight: FontWeight.w600,
+                                            color: SelmsColors.statusActiveText))
+                                  else
+                                    SizedBox(
+                                      height: 26,
+                                      child: ElevatedButton(
+                                        onPressed: _acceptingId == m.id ? null : () => _accept(m),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: SelmsColors.ink,
+                                          foregroundColor: Colors.white,
+                                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                                          textStyle: const TextStyle(fontSize: 11),
+                                        ),
+                                        child: Text(_acceptingId == m.id ? 'Accepting…' : 'Accept'),
+                                      ),
+                                    ),
+                                ],
                               ],
                             ),
                           ),

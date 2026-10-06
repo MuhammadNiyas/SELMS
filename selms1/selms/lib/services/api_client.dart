@@ -688,6 +688,17 @@ class ApiClient {
     if (res.statusCode != 201) throw ApiException(_extractMessage(res));
   }
 
+  /// IT explicitly acknowledging a system-authored notification (e.g.
+  /// the onboarding equipment-prep message) — not meaningful on a human
+  /// message, which the backend rejects.
+  Future<void> acceptMessage(String messageId) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/it/messages/$messageId/accept'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+  }
+
   String _extractMessage(http.Response res) {
     try {
       final data = jsonDecode(res.body) as Map<String, dynamic>;
