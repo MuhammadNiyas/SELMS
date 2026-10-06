@@ -1971,6 +1971,8 @@ def _default_flow_nodes():
                         "label": "Arrange courier", "sub": "Ship to home"}]},
         {"id": str(uuid.uuid4()), "type": "action", "icon": "ti-calendar",
          "label": "Schedule orientation", "sub": "Auto-assigned slot"},
+        {"id": str(uuid.uuid4()), "type": "action", "icon": "ti-message-circle",
+         "label": "Notify IT", "sub": "Equipment needed, sent to Talk to IT"},
     ]
 
 
