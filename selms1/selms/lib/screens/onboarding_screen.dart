@@ -350,6 +350,77 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
   }
 
+  bool _cancellingOnboarding = false;
+
+  /// Undoes an accidental "Start onboarding" click — confirms first,
+  /// then shows whatever warnings the backend returns (e.g. the welcome
+  /// email already went out and can't be recalled).
+  Future<void> _cancelOnboardingFlow() async {
+    if (_selectedEmployee == null) return;
+    final employeeId = _selectedEmployee!['employee_id'] as String;
+    final name = _selectedEmployee!['full_name'] as String;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: Text('Cancel onboarding for $name?', style: const TextStyle(fontSize: 15)),
+        content: const Text(
+          'This resets onboarding progress and removes any auto-booked orientation. '
+          "If the welcome email was already sent or equipment already assigned, "
+          "those real-world actions can't be undone — you'll see a warning after if so.",
+          style: TextStyle(fontSize: 12.5, height: 1.4),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Keep it')),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: ElevatedButton.styleFrom(backgroundColor: SelmsColors.rose, foregroundColor: Colors.white),
+            child: const Text('Cancel onboarding'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _cancellingOnboarding = true);
+    try {
+      final result = await _api.cancelOnboarding(employeeId);
+      if (!mounted) return;
+      if (result.warnings.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Onboarding cancelled.')));
+      } else {
+        await showDialog<void>(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: Colors.white,
+            title: const Text('Onboarding cancelled — with warnings', style: TextStyle(fontSize: 15)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: result.warnings
+                  .map((w) => Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Text('•  $w', style: const TextStyle(fontSize: 12.5, height: 1.4)),
+                      ))
+                  .toList(),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Got it')),
+            ],
+          ),
+        );
+      }
+      if (mounted) await _loadCandidatesThenFlow();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.toString()), backgroundColor: SelmsColors.rose));
+    } finally {
+      if (mounted) setState(() => _cancellingOnboarding = false);
+    }
+  }
+
   void _openEmailPopup(OnboardingFlowNode node) {
     if (_selectedEmployee == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -690,6 +761,21 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         backgroundColor: SelmsColors.ink,
                         foregroundColor: Colors.white,
                         elevation: 0,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                  if (_selectedEmployee!['onboarding_started'] == true) ...[
+                    OutlinedButton.icon(
+                      onPressed: _cancellingOnboarding ? null : _cancelOnboardingFlow,
+                      icon: _cancellingOnboarding
+                          ? const SizedBox(
+                              width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.undo, size: 14, color: SelmsColors.rose),
+                      label: Text(_cancellingOnboarding ? 'Cancelling…' : 'Cancel onboarding',
+                          style: const TextStyle(fontSize: 11.5, color: SelmsColors.rose)),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: SelmsColors.roseBorder),
                       ),
                     ),
                     const SizedBox(width: 10),

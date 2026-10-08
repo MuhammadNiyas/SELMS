@@ -1212,6 +1212,72 @@ def onboarding_auto_start(employee_id):
     }), 200
 
 
+@app.post("/api/onboarding/<employee_id>/cancel")
+@require_hr
+def onboarding_cancel(employee_id):
+    """Undo an accidental 'Start onboarding' — resets onboarding_status
+    back to not-started and removes the auto-booked orientation. Two
+    things it deliberately does NOT try to undo, because they're
+    real-world actions outside the database: an already-sent welcome
+    email (can't be recalled), and equipment IT has already physically
+    assigned. Both are surfaced as warnings in the response instead of
+    silently pretending to reverse them. If IT was already notified, they
+    get a follow-up system message so they don't keep preparing equipment
+    for someone who isn't onboarding after all."""
+    doc = users.find_one({"employee_id": employee_id, "role": "employee"})
+    if not doc:
+        return jsonify({"message": "Employee not found."}), 404
+
+    status = doc.get("onboarding_status") or {}
+    if not status.get("started"):
+        return jsonify({"message": "Onboarding hasn't been started for this employee."}), 400
+
+    warnings = []
+    if status.get("welcome_email_sent"):
+        warnings.append("The welcome email was already sent to the employee — this cannot be recalled.")
+
+    equipment_assigned = equipment.count_documents({
+        "assigned_to_employee_id": employee_id, "status": "assigned",
+    })
+    if equipment_assigned:
+        warnings.append(
+            f"{equipment_assigned} equipment item(s) are already assigned — return them manually via IT if needed."
+        )
+
+    users.update_one({"employee_id": employee_id}, {"$set": {
+        "onboarding_status": _default_onboarding_status(),
+    }})
+    removed_bookings = bookings.delete_many({
+        "employee_id": employee_id, "session_type": "orientation",
+    }).deleted_count
+
+    # Only bother telling IT if they were actually notified in the first
+    # place (an earlier auto-start with the Notify IT node present).
+    was_notified = messages.find_one({
+        "employee_id": employee_id, "target_role": "it", "sender_role": "system",
+    })
+    if was_notified:
+        messages.insert_one({
+            "employee_id": employee_id,
+            "employee_name": doc["full_name"],
+            "target_role": "it",
+            "sender_role": "system",
+            "sender_name": "SELMS System",
+            "content": (
+                f"Onboarding for {doc['full_name']} has been cancelled by HR — "
+                f"equipment preparation is no longer needed unless it's restarted."
+            ),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+    return jsonify({
+        "message": "Onboarding cancelled.",
+        "warnings": warnings,
+        "removed_bookings": removed_bookings,
+        "it_notified_of_cancellation": bool(was_notified),
+    }), 200
+
+
 @app.post("/api/onboarding/<employee_id>/draft-email")
 @require_hr
 def onboarding_draft_email(employee_id):

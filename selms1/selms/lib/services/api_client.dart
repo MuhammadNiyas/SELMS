@@ -132,6 +132,23 @@ class ApiClient {
     );
   }
 
+  /// Undoes an accidental "Start onboarding" — see onboarding_cancel on
+  /// the backend for exactly what is and isn't reversed.
+  Future<({String message, List<String> warnings, bool itNotifiedOfCancellation})> cancelOnboarding(
+      String employeeId) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/onboarding/$employeeId/cancel'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    return (
+      message: data['message'] as String,
+      warnings: (data['warnings'] as List).cast<String>(),
+      itNotifiedOfCancellation: data['it_notified_of_cancellation'] as bool? ?? false,
+    );
+  }
+
   Future<Map<String, String>> draftOnboardingEmail(String employeeId, {String instruction = ''}) async {
     final res = await http.post(
       Uri.parse('$baseUrl/api/onboarding/$employeeId/draft-email'),
