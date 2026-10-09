@@ -59,6 +59,15 @@ JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-me")
 JWT_EXPIRY_HOURS = 8
 VALID_ROLES = {"hr", "it", "employee"}
 
+# Used only for the confirm-you've-received-this link in onboarding
+# emails — that link gets opened on an employee's own device, which
+# `localhost` never resolves correctly on, unlike every other API call
+# the HR app makes (those stay on localhost/LAN, unaffected by this).
+# Set to a tunnel (ngrok) or real public URL when you need that link to
+# actually be reachable from outside this machine; leave unset otherwise
+# and it falls back to whatever host the request itself arrived on.
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+
 # --- Profile photo storage ---
 # Option A: plain files on the backend's own disk, served back out via
 # GET /uploads/<filename>. Fine for local/single-server deployments; if this
@@ -1313,7 +1322,8 @@ def onboarding_send_email(employee_id):
         return jsonify({"message": "Subject and body are required."}), 400
 
     token = secrets.token_urlsafe(24)
-    confirm_url = f"{request.host_url.rstrip('/')}/api/onboarding/confirm/{token}"
+    base_url = PUBLIC_BASE_URL or request.host_url.rstrip("/")
+    confirm_url = f"{base_url}/api/onboarding/confirm/{token}"
 
     try:
         send_email(to_email=doc["personal_email"], subject=subject,
