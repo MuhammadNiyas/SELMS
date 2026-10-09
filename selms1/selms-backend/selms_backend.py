@@ -1145,6 +1145,29 @@ def onboarding_candidates():
     return jsonify({"candidates": out}), 200
 
 
+@app.get("/api/onboarding/active")
+@require_hr
+def onboarding_active_list():
+    """Bird's-eye view of every employee currently onboarding, with their
+    real progress - the thing the Onboarding tab was missing: before this,
+    HR could only see one employee's progress at a time via the picker."""
+    docs = users.find({"role": "employee", "onboarding_status.started": True})
+    out = []
+    for d in docs:
+        _items, progress_percent = _onboarding_checklist(d)
+        status = d.get("onboarding_status") or {}
+        out.append({
+            "employee_id": d["employee_id"],
+            "full_name": d["full_name"],
+            "department": d.get("department"),
+            "job_title": d.get("job_title"),
+            "started_at": status.get("started_at"),
+            "progress_percent": progress_percent,
+        })
+    out.sort(key=lambda e: e["started_at"] or "", reverse=True)
+    return jsonify({"employees": out}), 200
+
+
 @app.post("/api/onboarding/<employee_id>/auto-start")
 @require_hr
 def onboarding_auto_start(employee_id):
@@ -1509,18 +1532,17 @@ def employee_upload_own_photo():
     return jsonify({"message": "Photo uploaded.", "profile_image_url": profile_image_url}), 200
 
 
-@app.get("/api/employee/me/checklist")
-@require_employee
-def employee_checklist():
+def _onboarding_checklist(employee_doc):
     """The 5-item onboarding checklist from the report (fig 3.28), derived
     from onboarding_status and signed_documents rather than duplicated
     into its own field — one source of truth for how far onboarding has
-    progressed, whether HR or the employee is looking at it."""
-    status = g.current_employee.get("onboarding_status") or _default_onboarding_status()
-    has_photo = bool(g.current_employee.get("profile_image_url"))
-    signed = g.current_employee.get("signed_documents") or {}
+    progressed, whether HR, the employee, or the active-onboarding
+    overview list is looking at it. Returns (items, progress_percent)."""
+    status = employee_doc.get("onboarding_status") or _default_onboarding_status()
+    has_photo = bool(employee_doc.get("profile_image_url"))
+    signed = employee_doc.get("signed_documents") or {}
     all_signed = len(signed) >= len(COMPANY_DOCUMENTS)
-    equipment_ready, equipment_ready_at = _compute_it_equipment_ready(g.current_employee)
+    equipment_ready, equipment_ready_at = _compute_it_equipment_ready(employee_doc)
 
     items = [
         {"id": "welcome_email", "label": "Welcome Email Received",
@@ -1536,10 +1558,14 @@ def employee_checklist():
     ]
 
     completed = sum(1 for i in items if i["done"])
-    return jsonify({
-        "items": items,
-        "progress_percent": round(completed / len(items) * 100),
-    }), 200
+    return items, round(completed / len(items) * 100)
+
+
+@app.get("/api/employee/me/checklist")
+@require_employee
+def employee_checklist():
+    items, progress_percent = _onboarding_checklist(g.current_employee)
+    return jsonify({"items": items, "progress_percent": progress_percent}), 200
 
 
 @app.get("/api/employee/me/documents")

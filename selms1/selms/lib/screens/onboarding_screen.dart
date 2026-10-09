@@ -31,6 +31,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   late final ApiClient _api = ApiClient(baseUrl: widget.apiBaseUrl, hrToken: widget.hrToken);
 
   List<Map<String, dynamic>> _candidates = [];
+  List<Map<String, dynamic>> _activeOnboarding = [];
+  bool _loadingActive = true;
   Map<String, dynamic>? _selectedEmployee; // null = editing the shared template
 
   List<OnboardingFlowNode> _nodes = [];
@@ -44,6 +46,34 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   void initState() {
     super.initState();
     _loadCandidatesThenFlow();
+    _loadActiveOnboarding();
+  }
+
+  Future<void> _loadActiveOnboarding() async {
+    try {
+      final list = await _api.onboardingActiveList();
+      if (!mounted) return;
+      setState(() {
+        _activeOnboarding = list;
+        _loadingActive = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingActive = false);
+    }
+  }
+
+  void _openStepperFor(Map<String, dynamic> employee) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => OnboardingStepperScreen(
+          apiBaseUrl: widget.apiBaseUrl,
+          hrToken: widget.hrToken,
+          employeeId: employee['employee_id'] as String,
+          fullName: employee['full_name'] as String,
+        ),
+      ),
+    );
   }
 
   Future<void> _loadCandidatesThenFlow() async {
@@ -54,6 +84,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     } catch (_) {
       // Candidate list is secondary — the flow itself still loads without it.
     }
+    _loadActiveOnboarding(); // keep the overview list in sync too, no need to await
     await _loadFlow();
   }
 
@@ -815,9 +846,76 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               ],
             ),
             const SizedBox(height: 18),
+            if (!_loadingActive && _activeOnboarding.isNotEmpty) ...[
+              _activeOnboardingList(),
+              const SizedBox(height: 18),
+            ],
             Expanded(child: _buildBody()),
           ],
         ),
+      ),
+    );
+  }
+
+  /// Simple bird's-eye view — one row per employee currently onboarding,
+  /// a progress bar, and a percentage. Tap a row to open their full
+  /// step-by-step checklist (OnboardingStepperScreen, already built).
+  Widget _activeOnboardingList() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Active Onboarding (${_activeOnboarding.length})',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: SelmsColors.textPrimary)),
+          const SizedBox(height: 10),
+          ..._activeOnboarding.map((e) {
+            final progress = (e['progress_percent'] as num).toInt();
+            return InkWell(
+              onTap: () => _openStepperFor(e),
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 160,
+                      child: Text(e['full_name'] as String? ?? '',
+                          style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500),
+                          overflow: TextOverflow.ellipsis),
+                    ),
+                    SizedBox(
+                      width: 110,
+                      child: Text(e['department'] as String? ?? '',
+                          style: const TextStyle(fontSize: 11.5, color: SelmsColors.textMuted),
+                          overflow: TextOverflow.ellipsis),
+                    ),
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: LinearProgressIndicator(
+                          value: progress / 100,
+                          minHeight: 6,
+                          backgroundColor: SelmsColors.border,
+                          valueColor: const AlwaysStoppedAnimation(SelmsColors.ink),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    SizedBox(
+                      width: 36,
+                      child: Text('$progress%',
+                          textAlign: TextAlign.right,
+                          style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600)),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
+        ],
       ),
     );
   }

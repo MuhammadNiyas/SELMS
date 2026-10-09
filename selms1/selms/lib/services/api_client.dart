@@ -104,6 +104,16 @@ class ApiClient {
     return (data['candidates'] as List).cast<Map<String, dynamic>>();
   }
 
+  /// Bird's-eye view of everyone currently onboarding, with real progress
+  /// — each entry has employee_id, full_name, department, job_title,
+  /// started_at, progress_percent.
+  Future<List<Map<String, dynamic>>> onboardingActiveList() async {
+    final res = await http.get(Uri.parse('$baseUrl/api/onboarding/active'), headers: _headers);
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    return (data['employees'] as List).cast<Map<String, dynamic>>();
+  }
+
   /// One-click automation: drafts the welcome email, then runs each
   /// remaining step only if that step's node is still present in this
   /// employee's own flow diagram (see onboarding_auto_start on the
