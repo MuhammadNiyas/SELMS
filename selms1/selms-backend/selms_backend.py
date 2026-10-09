@@ -18,9 +18,10 @@ Pairs with:
   - lib/screens/employee_edit_screen.dart      -> PUT /api/employees/<id>
 
 Run:
-    pip install flask flask-cors pymongo bcrypt pyjwt openpyxl --break-system-packages
-    export MONGO_URI="mongodb://localhost:27017"
-    export JWT_SECRET="change-this-in-production"
+    pip install flask flask-cors pymongo bcrypt pyjwt openpyxl python-dotenv --break-system-packages
+    Create a .env file in this folder (see .env.example) with MONGO_URI,
+    JWT_SECRET, SMTP_USER, SMTP_PASSWORD — loaded automatically below, so
+    no $env:... lines are needed before running this.
     python selms_backend.py
 """
 
@@ -40,11 +41,17 @@ from io import BytesIO
 import bcrypt
 import jwt
 from bson import ObjectId
+from dotenv import load_dotenv
 from flask import Flask, request, jsonify, g, send_file, send_from_directory
 from flask_cors import CORS
 from pymongo import MongoClient
 from openpyxl import Workbook
 from werkzeug.utils import secure_filename
+
+# Loads .env (same folder as this file) into the environment if present —
+# values already set via $env:/export still take priority, so this is
+# purely a convenience default, not a hidden override.
+load_dotenv()
 
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("SELMS_DB", "selms")
