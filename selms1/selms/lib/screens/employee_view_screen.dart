@@ -6,9 +6,9 @@ import '../models/employee_self_service.dart';
 import '../services/api_client.dart';
 import '../theme/selms_colors.dart';
 import '../widgets/app_shell.dart';
+import '../widgets/flow_items_panel.dart';
 import 'employee_edit_screen.dart';
 
-const _departureTypes = ['Resignation', 'Termination', 'Retirement'];
 
 class EmployeeViewScreen extends StatefulWidget {
   const EmployeeViewScreen({
@@ -32,8 +32,6 @@ class _EmployeeViewScreenState extends State<EmployeeViewScreen> {
   OffboardingChecklist? _offboarding;
   bool _loading = true;
   String? _error;
-  bool _resending = false;
-  bool _initiatingOffboarding = false;
   String? _markingStep;
 
   @override
@@ -70,103 +68,6 @@ class _EmployeeViewScreenState extends State<EmployeeViewScreen> {
     }
   }
 
-  Future<void> _initiateOffboarding() async {
-    final departureTypeCtrl = ValueNotifier<String>(_departureTypes.first);
-    final lastDayCtrl = TextEditingController();
-    final notesCtrl = TextEditingController();
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: Colors.white,
-          title: Text('Initiate offboarding — ${_employee!.fullName}', style: const TextStyle(fontSize: 15)),
-          content: SizedBox(
-            width: 360,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Departure type', style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
-                const SizedBox(height: 4),
-                DropdownButtonFormField<String>(
-                  initialValue: departureTypeCtrl.value,
-                  items: _departureTypes
-                      .map((t) => DropdownMenuItem(value: t, child: Text(t)))
-                      .toList(),
-                  onChanged: (v) => setDialogState(() => departureTypeCtrl.value = v ?? departureTypeCtrl.value),
-                  decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
-                ),
-                const SizedBox(height: 14),
-                const Text('Last working day', style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
-                const SizedBox(height: 4),
-                TextField(
-                  controller: lastDayCtrl,
-                  readOnly: true,
-                  decoration: const InputDecoration(
-                    isDense: true,
-                    hintText: 'yyyy-mm-dd',
-                    border: OutlineInputBorder(),
-                    suffixIcon: Icon(Icons.calendar_today_outlined, size: 16),
-                  ),
-                  onTap: () async {
-                    final picked = await showDatePicker(
-                      context: context,
-                      initialDate: DateTime.now(),
-                      firstDate: DateTime.now().subtract(const Duration(days: 365)),
-                      lastDate: DateTime.now().add(const Duration(days: 365)),
-                    );
-                    if (picked != null) {
-                      lastDayCtrl.text =
-                          '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
-                    }
-                  },
-                ),
-                const SizedBox(height: 14),
-                const Text('Notes (optional)', style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
-                const SizedBox(height: 4),
-                TextField(
-                  controller: notesCtrl,
-                  maxLines: 2,
-                  decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
-            ElevatedButton(
-              onPressed: lastDayCtrl.text.isEmpty ? null : () => Navigator.of(context).pop(true),
-              style: ElevatedButton.styleFrom(backgroundColor: SelmsColors.rose, foregroundColor: Colors.white),
-              child: const Text('Initiate offboarding'),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    if (confirmed != true) return;
-    if (lastDayCtrl.text.isEmpty) return;
-
-    setState(() => _initiatingOffboarding = true);
-    try {
-      await _api.initiateOffboarding(
-        widget.employeeId,
-        departureType: departureTypeCtrl.value,
-        lastWorkingDay: lastDayCtrl.text,
-        notes: notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Offboarding initiated.')));
-      await _load();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
-    } finally {
-      if (mounted) setState(() => _initiatingOffboarding = false);
-    }
-  }
-
   Future<void> _markOffboardingStep(String step) async {
     setState(() => _markingStep = step);
     try {
@@ -177,20 +78,6 @@ class _EmployeeViewScreenState extends State<EmployeeViewScreen> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
     } finally {
       if (mounted) setState(() => _markingStep = null);
-    }
-  }
-
-  Future<void> _resendWelcomeEmail() async {
-    setState(() => _resending = true);
-    try {
-      final message = await _api.resendWelcomeEmail(widget.employeeId);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
-    } finally {
-      if (mounted) setState(() => _resending = false);
     }
   }
 
@@ -425,44 +312,6 @@ class _EmployeeViewScreenState extends State<EmployeeViewScreen> {
                           SizedBox(
                             width: double.infinity,
                             child: OutlinedButton.icon(
-                              onPressed: _resending ? null : _resendWelcomeEmail,
-                              icon: _resending
-                                  ? const SizedBox(
-                                      width: 12,
-                                      height: 12,
-                                      child: CircularProgressIndicator(strokeWidth: 2),
-                                    )
-                                  : const Icon(Icons.mail_outline, size: 14, color: SelmsColors.ink),
-                              label: const Text('Resend welcome email',
-                                  style: TextStyle(fontSize: 11.5, color: SelmsColors.ink)),
-                              style: OutlinedButton.styleFrom(
-                                side: const BorderSide(color: SelmsColors.border),
-                                padding: const EdgeInsets.symmetric(vertical: 9),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          if (_offboarding?.started != true)
-                            SizedBox(
-                              width: double.infinity,
-                              child: OutlinedButton.icon(
-                                onPressed: _initiatingOffboarding ? null : _initiateOffboarding,
-                                icon: _initiatingOffboarding
-                                    ? const SizedBox(
-                                        width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
-                                    : const Icon(Icons.logout, size: 14, color: SelmsColors.rose),
-                                label: const Text('Initiate offboarding',
-                                    style: TextStyle(fontSize: 11.5, color: SelmsColors.rose)),
-                                style: OutlinedButton.styleFrom(
-                                  side: const BorderSide(color: SelmsColors.roseBorder),
-                                  padding: const EdgeInsets.symmetric(vertical: 9),
-                                ),
-                              ),
-                            ),
-                          if (_offboarding?.started != true) const SizedBox(height: 8),
-                          SizedBox(
-                            width: double.infinity,
-                            child: OutlinedButton.icon(
                               onPressed: _confirmDelete,
                               icon: const Icon(Icons.delete_outline, size: 14, color: SelmsColors.rose),
                               label: const Text('Delete',
@@ -482,7 +331,7 @@ class _EmployeeViewScreenState extends State<EmployeeViewScreen> {
                 _sectionTitle('Personal details'),
                 _grid([
                   _field('Gender', e.gender),
-                  _field('Date of birth', e.dateOfBirth),
+                  _field('Date of birth', _dateOnly(e.dateOfBirth)),
                   _field('Nationality', e.nationality),
                   _field('IC / passport no.', e.icPassportNo),
                   _field('Marital status', e.maritalStatus),
@@ -501,8 +350,8 @@ class _EmployeeViewScreenState extends State<EmployeeViewScreen> {
                   _field('Job title', e.jobTitle),
                   _field('Department', e.department),
                   _field('Line manager', e.lineManager),
-                  _field('Hire date', e.hireDate),
-                  _field('Confirmation date', e.confirmationDate),
+                  _field('Hire date', _dateOnly(e.hireDate)),
+                  _field('Confirmation date', _dateOnly(e.confirmationDate)),
                   _field('Employment status', e.employmentStatus),
                   _field('Work location type', e.workLocationType),
                   _field('Base salary', e.baseSalary != null ? 'RM ${e.baseSalary}' : null),
@@ -511,10 +360,14 @@ class _EmployeeViewScreenState extends State<EmployeeViewScreen> {
                 ]),
                 if (e.remarks?.isNotEmpty == true) _fullWidthField('Remarks', e.remarks),
                 const SizedBox(height: 20),
+                // Documents and surveys the onboarding / offboarding flow gave them.
+                FlowItemsPanel(api: _api, employeeId: widget.employeeId),
+                const SizedBox(height: 20),
                 _sectionTitle('Account details'),
                 _grid([
                   _field('Work email', e.workEmail),
                   _field('Role', 'Employee'),
+                  _field('SELMS login', e.loginStatus),
                 ]),
                 if (_offboarding?.started == true) ...[
                   const SizedBox(height: 20),
@@ -606,6 +459,13 @@ class _EmployeeViewScreenState extends State<EmployeeViewScreen> {
       ));
     }
     return Column(children: rows);
+  }
+
+  /// '2026-09-03T00:00:00.000' -> '03/09/2026' (the date only, no time).
+  String? _dateOnly(String? iso) {
+    final d = iso == null ? null : DateTime.tryParse(iso);
+    if (d == null) return iso;
+    return '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
   }
 
   Widget _field(String label, String? value) => Column(

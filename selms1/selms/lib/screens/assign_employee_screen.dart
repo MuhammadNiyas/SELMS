@@ -7,6 +7,7 @@
 import 'package:flutter/material.dart';
 import '../models/equipment.dart';
 import '../services/api_client.dart';
+import '../widgets/employee_avatar.dart';
 import '../theme/selms_colors.dart';
 
 class AssignEmployeeScreen extends StatefulWidget {
@@ -89,13 +90,6 @@ class _AssignEmployeeScreenState extends State<AssignEmployeeScreen> {
         _error = e.toString();
       });
     }
-  }
-
-  String _initials(String name) {
-    final parts = name.trim().split(RegExp(r'\s+'));
-    if (parts.isEmpty || parts.first.isEmpty) return '?';
-    if (parts.length == 1) return parts[0].substring(0, 1).toUpperCase();
-    return (parts.first.substring(0, 1) + parts.last.substring(0, 1)).toUpperCase();
   }
 
   @override
@@ -198,12 +192,11 @@ class _AssignEmployeeScreenState extends State<AssignEmployeeScreen> {
                               ),
                               child: Row(
                                 children: [
-                                  CircleAvatar(
-                                    radius: 14,
-                                    backgroundColor: SelmsColors.accentBg,
-                                    child: Text(_initials(emp['full_name'] as String? ?? '?'),
-                                        style: const TextStyle(
-                                            fontSize: 10, fontWeight: FontWeight.w600, color: SelmsColors.ink)),
+                                  EmployeeAvatar(
+                                    apiBaseUrl: widget.apiBaseUrl,
+                                    name: emp['full_name'] as String? ?? '?',
+                                    photoUrl: emp['profile_image_url'] as String?,
+                                    size: 28,
                                   ),
                                   const SizedBox(width: 10),
                                   Expanded(

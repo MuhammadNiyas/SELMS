@@ -45,7 +45,7 @@ Editing an employee afterwards never re-triggers this chain.
 
 ```bash
 cd selms-backend
-pip install flask flask-cors pymongo bcrypt pyjwt openpyxl --break-system-packages
+pip install flask flask-cors pymongo bcrypt pyjwt openpyxl pypdf python-docx --break-system-packages
 
 export MONGO_URI="mongodb://localhost:27017"
 export JWT_SECRET="change-this-in-production"

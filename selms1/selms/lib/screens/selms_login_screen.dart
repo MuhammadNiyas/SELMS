@@ -1,8 +1,8 @@
 // lib/screens/selms_login_screen.dart
 //
 // SELMS login screen — HR, IT, and Employee sign in from one screen.
-// Restyled to match the black-sidebar / light-blue palette used across the
-// HR admin screens (theme/selms_colors.dart).
+// A single centred sign-in card under the system title, in the same
+// black / light-blue palette as the HR admin screens (theme/selms_colors.dart).
 //
 // There is deliberately no "Register" action here. Accounts are provisioned
 // by the seeded HR admin (scripts/seed_account.py) and, afterwards, by HR
@@ -15,6 +15,7 @@ import '../theme/selms_colors.dart';
 import 'dashboard_screen.dart';
 import 'it_dashboard_screen.dart';
 import 'employee_home_screen.dart';
+import 'employee_set_password_screen.dart';
 
 enum SelmsRole { hr, it, employee }
 
@@ -118,6 +119,18 @@ class _SelmsLoginScreenState extends State<SelmsLoginScreen> {
               ),
             ),
           );
+        } else if (data['must_change_password'] == true) {
+          // Still on HR's temporary password - make them choose their own first.
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => EmployeeSetPasswordScreen(
+                apiBaseUrl: widget.apiBaseUrl,
+                employeeToken: token,
+                temporaryPassword: password,
+                fullName: data['full_name'] as String?,
+              ),
+            ),
+          );
         } else {
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(
@@ -143,226 +156,183 @@ class _SelmsLoginScreenState extends State<SelmsLoginScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: SelmsColors.accentBg,
-      body: Row(
-        children: [
-          if (MediaQuery.of(context).size.width > 900)
-            Expanded(
-              flex: 5,
-              child: Container(
-                color: SelmsColors.ink,
-                padding: const EdgeInsets.all(48),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 32,
-                          height: 32,
-                          decoration: BoxDecoration(
-                            color: SelmsColors.accentBg,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          alignment: Alignment.center,
-                          child: const Text('S',
-                              style: TextStyle(
-                                  color: SelmsColors.ink,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 15)),
-                        ),
-                        const SizedBox(width: 10),
-                        const Text('SELMS',
-                            style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600)),
-                      ],
-                    ),
-                    const Spacer(),
-                    const Text(
-                      'One system.\nThree roles.\nNo manual handoffs.',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 28,
-                        height: 1.25,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Onboarding and offboarding, coordinated automatically '
-                      'between HR, IT and every new hire.',
-                      style: TextStyle(color: Colors.white60, fontSize: 13.5, height: 1.5),
-                    ),
-                    const Spacer(),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: const [
-                        Icon(Icons.shield_outlined, color: Colors.white38, size: 16),
-                        SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Accounts are provisioned by your HR administrator. '
-                            'There is no public sign-up.',
-                            style: TextStyle(color: Colors.white38, fontSize: 11.5, height: 1.4),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+      body: SafeArea(
+        child: Column(
+          children: [
+            // ---- title, centred at the top ----
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 56, 24, 0),
+              child: const Text(
+                'SMART EMPLOYEE LIFECYCLE MANAGEMENT SYSTEM',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 24,
+                  height: 1.3,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.2,
+                  color: SelmsColors.textPrimary,
                 ),
               ),
             ),
-          Expanded(
-            flex: 6,
-            child: Center(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 400),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Sign in',
-                          style: TextStyle(
-                              fontSize: 24,
-                              fontWeight: FontWeight.w700,
-                              color: SelmsColors.textPrimary)),
-                      const SizedBox(height: 4),
-                      const Text('Choose your role, then enter your credentials.',
-                          style: TextStyle(fontSize: 13, color: Colors.black54)),
-                      const SizedBox(height: 24),
-                      Row(
-                        children: SelmsRole.values.map((r) {
-                          final active = r == _role;
-                          return Expanded(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 4),
-                              child: InkWell(
-                                onTap: () => setState(() => _role = r),
-                                borderRadius: BorderRadius.circular(10),
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(vertical: 12),
-                                  decoration: BoxDecoration(
-                                    color: active ? SelmsColors.accentBg : Colors.white,
-                                    border: Border.all(
-                                      color: active ? SelmsColors.ink : SelmsColors.border,
-                                      width: active ? 1.4 : 1,
-                                    ),
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  child: Column(
-                                    children: [
-                                      Icon(r.icon,
-                                          size: 18,
-                                          color: active ? SelmsColors.ink : SelmsColors.textMuted),
-                                      const SizedBox(height: 6),
-                                      Text(
-                                        r.label,
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                          fontSize: 11.5,
-                                          fontWeight: FontWeight.w600,
-                                          color: active ? SelmsColors.ink : SelmsColors.textSecondary,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(_role.hint,
-                          style: const TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
-                      const SizedBox(height: 24),
-                      const Text('Work email',
-                          style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: SelmsColors.textSecondary)),
-                      const SizedBox(height: 6),
-                      TextField(
-                        controller: _emailCtrl,
-                        keyboardType: TextInputType.emailAddress,
-                        decoration: _fieldDecoration('you@company.my'),
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Password',
-                              style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: SelmsColors.textSecondary)),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      TextField(
-                        controller: _passwordCtrl,
-                        obscureText: _obscure,
-                        decoration: _fieldDecoration('Enter your password').copyWith(
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                                _obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
-                                size: 19,
-                                color: SelmsColors.textMuted),
-                            onPressed: () => setState(() => _obscure = !_obscure),
-                          ),
-                        ),
-                      ),
-                      if (_error != null) ...[
-                        const SizedBox(height: 14),
+            // ---- sign-in card, centred in the page ----
+            Expanded(
+              child: Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 420),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                          padding: const EdgeInsets.fromLTRB(28, 26, 28, 28),
                           decoration: BoxDecoration(
-                            color: SelmsColors.roseBg,
-                            border: Border.all(color: SelmsColors.roseBorder),
-                            borderRadius: BorderRadius.circular(8),
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.06),
+                                blurRadius: 24,
+                                offset: const Offset(0, 8),
+                              ),
+                            ],
                           ),
-                          child: Text(_error!,
-                              style: const TextStyle(fontSize: 12, color: SelmsColors.rose)),
+                          child: _signInForm(),
+                        ),
+                        const SizedBox(height: 18),
+                        const Text(
+                          'Accounts are created by your HR administrator — there is no public sign-up.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 11.5, height: 1.4, color: SelmsColors.textMuted),
                         ),
                       ],
-                      const SizedBox(height: 20),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: _submitting ? null : _submit,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: SelmsColors.ink,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                            elevation: 0,
-                          ),
-                          child: _submitting
-                              ? const SizedBox(
-                                  height: 18,
-                                  width: 18,
-                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                                )
-                              : Text('Sign in as ${_role.label}',
-                                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                      const Text(
-                        "Don't have an account? Accounts aren't self-registered — "
-                        "ask your HR administrator to add you.",
-                        style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted, height: 1.4),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _signInForm() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Sign in',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: SelmsColors.textPrimary)),
+        const SizedBox(height: 4),
+        const Text('Choose your role, then enter your credentials.',
+            style: TextStyle(fontSize: 12.5, color: SelmsColors.textSecondary)),
+        const SizedBox(height: 20),
+        Row(
+          children: SelmsRole.values.map((r) {
+            final active = r == _role;
+            return Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: InkWell(
+                  onTap: () => setState(() => _role = r),
+                  borderRadius: BorderRadius.circular(10),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    decoration: BoxDecoration(
+                      color: active ? SelmsColors.accentBg : Colors.white,
+                      border: Border.all(
+                        color: active ? SelmsColors.ink : SelmsColors.border,
+                        width: active ? 1.4 : 1,
+                      ),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Column(
+                      children: [
+                        Icon(r.icon,
+                            size: 18, color: active ? SelmsColors.ink : SelmsColors.textMuted),
+                        const SizedBox(height: 6),
+                        Text(
+                          r.label,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            color: active ? SelmsColors.ink : SelmsColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+        const SizedBox(height: 22),
+        const Text('Work email',
+            style: TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w600, color: SelmsColors.textSecondary)),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _emailCtrl,
+          keyboardType: TextInputType.emailAddress,
+          textInputAction: TextInputAction.next,
+          decoration: _fieldDecoration('you@company.my'),
+        ),
+        const SizedBox(height: 16),
+        const Text('Password',
+            style: TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w600, color: SelmsColors.textSecondary)),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _passwordCtrl,
+          obscureText: _obscure,
+          textInputAction: TextInputAction.done,
+          onSubmitted: (_) => _submitting ? null : _submit(),
+          decoration: _fieldDecoration('Enter your password').copyWith(
+            suffixIcon: IconButton(
+              icon: Icon(_obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                  size: 19, color: SelmsColors.textMuted),
+              onPressed: () => setState(() => _obscure = !_obscure),
+            ),
+          ),
+        ),
+        if (_error != null) ...[
+          const SizedBox(height: 14),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(
+              color: SelmsColors.roseBg,
+              border: Border.all(color: SelmsColors.roseBorder),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(_error!, style: const TextStyle(fontSize: 12, color: SelmsColors.rose)),
           ),
         ],
-      ),
+        const SizedBox(height: 22),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            onPressed: _submitting ? null : _submit,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: SelmsColors.ink,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 15),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              elevation: 0,
+            ),
+            child: _submitting
+                ? const SizedBox(
+                    height: 18,
+                    width: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  )
+                : Text('Sign in as ${_role.label}',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+          ),
+        ),
+      ],
     );
   }
 

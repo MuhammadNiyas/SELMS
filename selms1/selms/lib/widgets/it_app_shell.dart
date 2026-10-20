@@ -6,14 +6,19 @@
 // (dark sidebar, light-blue content area) so it still feels like one app.
 
 import 'package:flutter/material.dart';
+import '../services/api_client.dart';
 import '../theme/selms_colors.dart';
+import 'app_shell.dart' show SelmsSession;
+import 'chat_panel.dart';
 import '../screens/selms_login_screen.dart';
 import '../screens/it_dashboard_screen.dart';
 import '../screens/it_products_screen.dart';
 import '../screens/it_scan_screen.dart';
 import '../screens/it_messages_screen.dart';
+import '../screens/it_shipments_screen.dart';
+import '../screens/it_schedule_screen.dart';
 
-enum ItRoute { dashboard, products, scan, messages }
+enum ItRoute { dashboard, products, scan, shipments, schedule, messages }
 
 class ItAppShell extends StatefulWidget {
   const ItAppShell({
@@ -35,9 +40,49 @@ class ItAppShell extends StatefulWidget {
 
 class _ItAppShellState extends State<ItAppShell> {
   bool _collapsed = false;
+  bool _chatOpen = false;
+
+  /// IT's assistant: finds and shares company documents (policies, forms).
+  void _openChat() {
+    if (_chatOpen) return;
+    setState(() => _chatOpen = true);
+    final api = ApiClient(baseUrl: widget.apiBaseUrl, hrToken: widget.itToken);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (_) => Dialog(
+        alignment: Alignment.bottomRight,
+        insetPadding: const EdgeInsets.only(right: 24, bottom: 24),
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        child: SizedBox(
+          width: 340,
+          height: 460,
+          child: ChatPanel(
+            title: 'SELMS IT Assistant',
+            hint: "Hi! I'm your SELMS IT Assistant. I can find company documents and policies for you.",
+            suggestions: const ['what documents do we have?', 'IT policy', 'acceptable use'],
+            onSend: api.itChat,
+            documentUrl: api.documentDownloadUrl,
+          ),
+        ),
+      ),
+    ).then((_) {
+      if (mounted) setState(() => _chatOpen = false);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
+    return SelmsSession(
+      apiBaseUrl: widget.apiBaseUrl,
+      token: widget.itToken,
+      role: 'it',
+      child: _buildShell(context),
+    );
+  }
+
+  Widget _buildShell(BuildContext context) {
     return Scaffold(
       backgroundColor: SelmsColors.accentBg,
       body: Stack(
@@ -80,6 +125,26 @@ class _ItAppShellState extends State<ItAppShell> {
                 ),
               ),
             ),
+          Positioned(
+            bottom: 24,
+            right: 24,
+            child: InkWell(
+              onTap: _openChat,
+              borderRadius: BorderRadius.circular(28),
+              child: Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: SelmsColors.ink,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 10, offset: const Offset(0, 3)),
+                  ],
+                ),
+                child: const Icon(Icons.smart_toy_outlined, size: 22, color: Colors.white),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -112,17 +177,9 @@ class _ItSidebar extends StatelessWidget {
             padding: const EdgeInsets.only(left: 6, bottom: 24),
             child: Row(
               children: [
-                Container(
-                  width: 30,
-                  height: 30,
-                  decoration: BoxDecoration(color: SelmsColors.accentBg, borderRadius: BorderRadius.circular(8)),
-                  alignment: Alignment.center,
-                  child: const Text('S',
-                      style: TextStyle(color: SelmsColors.ink, fontWeight: FontWeight.bold, fontSize: 14)),
-                ),
-                const SizedBox(width: 10),
                 const Text('SELMS',
-                    style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
+                    style: TextStyle(
+                        color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
                 const Spacer(),
                 InkWell(
                   onTap: onCollapse,
@@ -170,6 +227,32 @@ class _ItSidebar extends StatelessWidget {
               Navigator.of(context).pushReplacement(
                 MaterialPageRoute(
                   builder: (_) => ItScanScreen(apiBaseUrl: apiBaseUrl, itToken: itToken),
+                ),
+              );
+            },
+          ),
+          _ItNavItem(
+            icon: Icons.local_shipping_outlined,
+            label: 'Shipments',
+            active: activeRoute == ItRoute.shipments,
+            onTap: () {
+              if (activeRoute == ItRoute.shipments) return;
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(
+                  builder: (_) => ItShipmentsScreen(apiBaseUrl: apiBaseUrl, itToken: itToken),
+                ),
+              );
+            },
+          ),
+          _ItNavItem(
+            icon: Icons.calendar_month_outlined,
+            label: 'Schedule',
+            active: activeRoute == ItRoute.schedule,
+            onTap: () {
+              if (activeRoute == ItRoute.schedule) return;
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(
+                  builder: (_) => ItScheduleScreen(apiBaseUrl: apiBaseUrl, itToken: itToken),
                 ),
               );
             },

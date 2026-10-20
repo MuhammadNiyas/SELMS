@@ -164,8 +164,14 @@ class _AddEquipmentScreenState extends State<AddEquipmentScreen> {
       if (_photoBytes != null) {
         try {
           await _api.uploadEquipmentPhoto(created.id, _photoBytes!);
-        } catch (_) {
-          // Best-effort — a failed photo upload shouldn't undo the record just created.
+        } catch (e) {
+          // A failed photo upload shouldn't undo the record just created,
+          // but say so - it can be added later from Edit.
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Equipment saved, but the photo could not be uploaded: $e')),
+            );
+          }
         }
       }
 

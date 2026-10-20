@@ -16,7 +16,7 @@ import 'employee_view_screen.dart';
 
 const _departments = ['HR', 'IT', 'Marketing', 'Finance', 'Operations'];
 const _employmentStatuses = ['Probation', 'Confirmed', 'Contract', 'Full-Time', 'Part-Time'];
-const _workLocationTypes = ['Onsite', 'Remote', 'Hybrid'];
+const _workLocationTypes = ['Onsite', 'Remote'];
 
 class EmployeeDirectoryScreen extends StatefulWidget {
   const EmployeeDirectoryScreen({super.key, required this.apiBaseUrl, required this.hrToken});
@@ -250,71 +250,56 @@ class _EmployeeDirectoryScreenState extends State<EmployeeDirectoryScreen> {
               children: [
                 Expanded(
                   child: Container(
-                    constraints: const BoxConstraints(maxWidth: 320),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      border: Border.all(color: SelmsColors.border),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    constraints: const BoxConstraints(maxWidth: 420),
+                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8)),
                     child: Row(
                       children: [
-                        const SizedBox(width: 10),
-                        const Icon(Icons.search, size: 16, color: SelmsColors.textMuted),
-                        const SizedBox(width: 8),
+                        const Padding(
+                          padding: EdgeInsets.only(left: 2),
+                          child: Icon(Icons.search, size: 15, color: SelmsColors.textMuted),
+                        ),
+                        const SizedBox(width: 6),
                         Expanded(
                           child: TextField(
                             controller: _searchCtrl,
-                            onSubmitted: (_) => _load(),
-                            style: const TextStyle(fontSize: 13),
+                            onChanged: (_) => _load(),
                             decoration: const InputDecoration(
-                              isDense: true,
                               border: InputBorder.none,
+                              isDense: true,
                               hintText: 'Search employees...',
-                              hintStyle: TextStyle(fontSize: 13, color: SelmsColors.textMuted),
+                              hintStyle: TextStyle(fontSize: 12.5, color: SelmsColors.textMuted),
                             ),
+                            style: const TextStyle(fontSize: 12.5),
                           ),
                         ),
-                        Container(width: 1, height: 18, color: SelmsColors.border),
-                        InkWell(
-                          key: _filterButtonKey,
-                          onTap: _openFilterPanel,
-                          borderRadius: BorderRadius.circular(6),
-                          child: Container(
-                            margin: const EdgeInsets.all(4),
-                            width: 30,
-                            height: 30,
-                            decoration: BoxDecoration(
-                              color: SelmsColors.ink,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Stack(
-                              clipBehavior: Clip.none,
-                              children: [
-                                const Center(
-                                  child: Icon(Icons.filter_list, size: 15, color: Colors.white),
-                                ),
-                                if (_activeFilterCount > 0)
-                                  Positioned(
-                                    top: -3,
-                                    right: -3,
-                                    child: Container(
-                                      width: 14,
-                                      height: 14,
-                                      decoration: const BoxDecoration(
-                                          color: SelmsColors.accentBg, shape: BoxShape.circle),
-                                      alignment: Alignment.center,
-                                      child: Text('$_activeFilterCount',
-                                          style: const TextStyle(
-                                              fontSize: 9,
-                                              fontWeight: FontWeight.w700,
-                                              color: SelmsColors.ink)),
-                                    ),
-                                  ),
-                              ],
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                InkWell(
+                  key: _filterButtonKey,
+                  onTap: _openFilterPanel,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    padding: const EdgeInsets.all(9),
+                    decoration: BoxDecoration(color: SelmsColors.ink, borderRadius: BorderRadius.circular(8)),
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        const Icon(Icons.filter_list, size: 15, color: Colors.white),
+                        if (_activeFilterCount > 0)
+                          Positioned(
+                            right: -6,
+                            top: -6,
+                            child: Container(
+                              padding: const EdgeInsets.all(3),
+                              decoration: const BoxDecoration(color: SelmsColors.rose, shape: BoxShape.circle),
+                              child: Text('$_activeFilterCount',
+                                  style: const TextStyle(fontSize: 8, color: Colors.white, fontWeight: FontWeight.w600)),
                             ),
                           ),
-                        ),
                       ],
                     ),
                   ),

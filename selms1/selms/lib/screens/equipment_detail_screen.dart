@@ -12,11 +12,20 @@ import '../widgets/form_fields.dart' show SquarePhotoViewDialog;
 import 'edit_equipment_screen.dart';
 
 class EquipmentDetailScreen extends StatefulWidget {
-  const EquipmentDetailScreen({super.key, required this.apiBaseUrl, required this.itToken, required this.equipmentId});
+  const EquipmentDetailScreen({
+    super.key,
+    required this.apiBaseUrl,
+    required this.itToken,
+    required this.equipmentId,
+    this.viewOnly = false,
+  });
 
   final String apiBaseUrl;
   final String itToken;
   final String equipmentId;
+
+  /// HR opens the same page as IT, but without Edit and Retrieve.
+  final bool viewOnly;
 
   @override
   State<EquipmentDetailScreen> createState() => _EquipmentDetailScreenState();
@@ -267,26 +276,28 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
                           style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500, color: _statusFg(e.status))),
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  InkWell(
-                    onTap: () {
-                      Navigator.of(context)
-                          .push(MaterialPageRoute(
-                            builder: (_) => EditEquipmentScreen(
-                              apiBaseUrl: widget.apiBaseUrl,
-                              itToken: widget.itToken,
-                              equipmentId: widget.equipmentId,
-                            ),
-                          ))
-                          .then((_) => _load());
-                    },
-                    borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8)),
-                      child: const Icon(Icons.edit_outlined, size: 16, color: SelmsColors.textSecondary),
+                  if (!widget.viewOnly) ...[
+                    const SizedBox(width: 10),
+                    InkWell(
+                      onTap: () {
+                        Navigator.of(context)
+                            .push(MaterialPageRoute(
+                              builder: (_) => EditEquipmentScreen(
+                                apiBaseUrl: widget.apiBaseUrl,
+                                itToken: widget.itToken,
+                                equipmentId: widget.equipmentId,
+                              ),
+                            ))
+                            .then((_) => _load());
+                      },
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8)),
+                        child: const Icon(Icons.edit_outlined, size: 16, color: SelmsColors.textSecondary),
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ),
 
@@ -324,11 +335,12 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
                               ],
                             ),
                           ),
-                          InkWell(
-                            onTap: () => _showReturnDialog(e),
-                            child: const Text('Retrieve',
-                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: SelmsColors.ink)),
-                          ),
+                          if (!widget.viewOnly)
+                            InkWell(
+                              onTap: () => _showReturnDialog(e),
+                              child: const Text('Retrieve',
+                                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: SelmsColors.ink)),
+                            ),
                         ],
                       ),
                       const Divider(height: 20, color: SelmsColors.border),
@@ -597,7 +609,7 @@ class ReturnEquipmentDialogState extends State<ReturnEquipmentDialog> {
                   style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w500, color: SelmsColors.textSecondary)),
               const SizedBox(height: 8),
               Row(
-                children: ['Good', 'Damaged'].map((c) {
+                children: ['Good', 'Damaged', 'Lost'].map((c) {
                   final isSelected = c == _condition;
                   return Padding(
                     padding: const EdgeInsets.only(right: 6),

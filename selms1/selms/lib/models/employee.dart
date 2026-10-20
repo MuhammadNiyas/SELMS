@@ -44,6 +44,9 @@ class Employee {
     this.workEmail,
     this.onboardingStage,
     this.profileImageUrl,
+    this.passwordState,
+    this.temporaryPassword,
+    this.loginStatus,
   });
 
   final String employeeId;
@@ -76,6 +79,15 @@ class Employee {
   /// Relative path returned by the backend, e.g. "/uploads/EMP-004.jpg".
   /// Callers should prefix with apiBaseUrl to load it.
   final String? profileImageUrl;
+
+  /// 'temporary' (HR's, still to be replaced), 'own' (they made one) or 'unknown'.
+  final String? passwordState;
+
+  /// HR's temporary password while the employee is still on it (HR view only).
+  final String? temporaryPassword;
+
+  /// 'Open' / 'Open until the end of <date>' / 'Closed (last working day <date>)'.
+  final String? loginStatus;
 
   /// Derived pill: Onboarding / Active. (Offboarding not modeled yet.)
   String get statusLabel =>
@@ -117,5 +129,8 @@ class Employee {
         workEmail: j['work_email'] as String? ?? j['email'] as String?,
         onboardingStage: j['onboarding_stage'] as String?,
         profileImageUrl: j['profile_image_url'] as String?,
+        passwordState: j['password_state'] as String?,
+        temporaryPassword: j['temporary_password'] as String?,
+        loginStatus: j['login_status'] as String?,
       );
 }

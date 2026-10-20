@@ -151,7 +151,7 @@ class _ReviewEmployeeScreenState extends State<ReviewEmployeeScreen> {
                     _sectionTitle('Personal details'),
                     _grid([
                       _field('Gender', d['gender']),
-                      _field('Date of birth', d['date_of_birth']),
+                      _field('Date of birth', _dateOnly(d['date_of_birth'])),
                       _field('Nationality', d['nationality']),
                       _field('IC / passport no.', d['ic_passport_no']),
                       _field('Marital status', d['marital_status']),
@@ -169,8 +169,8 @@ class _ReviewEmployeeScreenState extends State<ReviewEmployeeScreen> {
                       _field('Job title', d['job_title']),
                       _field('Department', d['department']),
                       _field('Line manager', d['line_manager']),
-                      _field('Hire date', d['hire_date']),
-                      _field('Confirmation date', d['confirmation_date']),
+                      _field('Hire date', _dateOnly(d['hire_date'])),
+                      _field('Confirmation date', _dateOnly(d['confirmation_date'])),
                       _field('Employment status', d['employment_status']),
                       _field('Work location type', d['work_location_type']),
                       _field('Base salary', salary != null ? 'RM $salary' : null),
@@ -275,6 +275,13 @@ class _ReviewEmployeeScreenState extends State<ReviewEmployeeScreen> {
       ));
     }
     return Column(children: rows);
+  }
+
+  /// '2026-09-03T00:00:00.000' -> '03/09/2026' (the date only, no time).
+  String? _dateOnly(dynamic iso) {
+    final d = iso == null ? null : DateTime.tryParse(iso.toString());
+    if (d == null) return iso?.toString();
+    return '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
   }
 
   Widget _field(String label, dynamic value) => Column(

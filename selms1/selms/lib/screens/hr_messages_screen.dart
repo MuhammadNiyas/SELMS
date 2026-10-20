@@ -7,6 +7,7 @@
 import 'package:flutter/material.dart';
 import '../models/message.dart';
 import '../services/api_client.dart';
+import '../widgets/employee_avatar.dart';
 import '../theme/selms_colors.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/message_thread_panel.dart';
@@ -50,13 +51,6 @@ class _HrMessagesScreenState extends State<HrMessagesScreen> {
         _loading = false;
       });
     }
-  }
-
-  String _initials(String name) {
-    final parts = name.trim().split(RegExp(r'\s+'));
-    if (parts.isEmpty || parts.first.isEmpty) return '?';
-    if (parts.length == 1) return parts[0].substring(0, 1).toUpperCase();
-    return (parts.first.substring(0, 1) + parts.last.substring(0, 1)).toUpperCase();
   }
 
   @override
@@ -114,11 +108,10 @@ class _HrMessagesScreenState extends State<HrMessagesScreen> {
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                     child: Row(
                       children: [
-                        CircleAvatar(
-                          radius: 16,
-                          backgroundColor: SelmsColors.ink,
-                          child: Text(_initials(c.employeeName),
-                              style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w600)),
+                        EmployeeAvatar(
+                          apiBaseUrl: widget.apiBaseUrl,
+                          name: c.employeeName,
+                          photoUrl: c.profileImageUrl,
                         ),
                         const SizedBox(width: 10),
                         Expanded(

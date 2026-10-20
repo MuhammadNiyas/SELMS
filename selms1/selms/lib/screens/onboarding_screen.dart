@@ -9,12 +9,16 @@
 // from the template server-side the first time it's opened) — edits from
 // here on only affect that one employee.
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/onboarding_flow_node.dart';
 import '../services/api_client.dart';
+import '../widgets/employee_avatar.dart';
 import '../theme/selms_colors.dart';
 import '../widgets/app_shell.dart';
+import '../widgets/flow_step_editors.dart';
 import '../widgets/scheduling_dialog.dart';
+import '../widgets/start_review_dialog.dart';
 import 'onboarding_stepper_screen.dart';
 
 class OnboardingScreen extends StatefulWidget {
@@ -42,11 +46,59 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   String? _error;
   String? _reorderingNodeId;
 
+  // Where the picked employee is in their flow, by node id: each value is
+  // {state: done|current|upcoming, kind: auto|it|hr, hint}.
+  Map<String, Map<String, dynamic>> _runById = {};
+  Timer? _runTimer;
+  String? _completingStepId;
+
   @override
   void initState() {
     super.initState();
     _loadCandidatesThenFlow();
     _loadActiveOnboarding();
+    // IT and employees move the flow along from their own screens, so keep
+    // this view current.
+    _runTimer = Timer.periodic(const Duration(seconds: 15), (_) => _loadRun());
+  }
+
+  @override
+  void dispose() {
+    _runTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadRun() async {
+    final emp = _selectedEmployee;
+    if (emp == null) {
+      if (_runById.isNotEmpty && mounted) setState(() => _runById = {});
+      return;
+    }
+    try {
+      final steps = await _api.getOnboardingRun(emp['employee_id'] as String);
+      if (!mounted || _selectedEmployee == null) return;
+      setState(() => _runById = {for (final s in steps) s['id'] as String: s});
+      // The history panel's progress moves with it.
+      _loadActiveOnboarding();
+    } catch (_) {
+      // Non-fatal - the flow chart still shows, just without step states.
+    }
+  }
+
+  Future<void> _completeStep(String stepId) async {
+    final emp = _selectedEmployee;
+    if (emp == null || _completingStepId != null) return;
+    setState(() => _completingStepId = stepId);
+    try {
+      await _api.completeOnboardingStep(emp['employee_id'] as String, stepId);
+      await _loadRun();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.toString()), backgroundColor: SelmsColors.rose));
+    } finally {
+      if (mounted) setState(() => _completingStepId = null);
+    }
   }
 
   Future<void> _loadActiveOnboarding() async {
@@ -93,6 +145,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       _loading = true;
       _error = null;
     });
+    _loadRun();
     try {
       final raw = _selectedEmployee == null
           ? await _api.getFlowTemplate()
@@ -184,11 +237,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                             itemBuilder: (context, i) {
                               final c = _candidates[i];
                               return ListTile(
-                                leading: CircleAvatar(
-                                  backgroundColor: SelmsColors.accentBg,
-                                  child: Text(_initials(c['full_name'] as String),
-                                      style: const TextStyle(
-                                          fontSize: 11, fontWeight: FontWeight.w600, color: SelmsColors.ink)),
+                                leading: EmployeeAvatar(
+                                  apiBaseUrl: widget.apiBaseUrl,
+                                  name: c['full_name'] as String,
+                                  photoUrl: c['profile_image_url'] as String?,
+                                  size: 40,
                                 ),
                                 title: Text(c['full_name'] as String, style: const TextStyle(fontSize: 13)),
                                 subtitle: Text('${c['employee_id']} · ${c['department'] ?? ''}',
@@ -257,6 +310,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     if (picked == null) return;
 
     final newId = DateTime.now().microsecondsSinceEpoch.toString();
+    if (picked.step != null) {
+      // Documents / Survey: HR fills in the details before the step is added.
+      final stepNode = await buildStepNode(context, _api, picked, newId);
+      if (stepNode == null || !mounted) return;
+      setState(() => list.insert(index, stepNode));
+      _markDirty();
+      await _save(); // one save, so the step can't be lost by forgetting a second button
+      return;
+    }
     final node = picked.type == 'condition'
         ? OnboardingFlowNode(
             id: newId,
@@ -273,6 +335,22 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Future<void> _editStep(OnboardingFlowNode node) async {
+    // Email and scheduling steps open their own window from the pencil.
+    // (Steps with settings - Documents, Survey, Send email, Send notification - have their own editors below.)
+    if (node.step == null && node.locked && node.icon == 'ti-mail') return _openEmailPopup(node);
+    if (node.step == null && node.icon == 'ti-calendar') {
+      // The orientation / exit interview step is planned here and booked at Start;
+      // a meeting added with "+" is booked straight away in the scheduling window.
+      return node.locked ? _openMeetingPlan(node) : _openSchedulingPopup(node);
+    }
+    if (node.step != null) {
+      if (await editStepNode(context, _api, node) && mounted) {
+        setState(() {});
+        _markDirty();
+        await _save();
+      }
+      return;
+    }
     final labelCtrl = TextEditingController(text: node.label);
     final subCtrl = TextEditingController(text: node.sub ?? '');
     final result = await showDialog<bool>(
@@ -306,6 +384,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       ),
     );
     if (result == true) {
+      // An extra step can't take a locked step's name - SELMS would treat it as that step.
+      final newLabel = labelCtrl.text.trim();
+      if (_nodes.any((n) => n.locked && n.id != node.id && n.label.toLowerCase() == newLabel.toLowerCase())) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text('"$newLabel" is the name of a locked step. Please choose another name.')));
+        }
+        return;
+      }
       setState(() {
         node.label = labelCtrl.text.trim().isEmpty ? node.label : labelCtrl.text.trim();
         node.sub = subCtrl.text.trim().isEmpty ? null : subCtrl.text.trim();
@@ -314,19 +401,101 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
   }
 
+  /// The format planned on the orientation / exit interview step; if none was
+  /// picked with the pencil: Remote employees online, Onsite in person.
+  String _plannedMeetingMode(String label) {
+    final node = _nodes.where((n) => n.label == label).firstOrNull;
+    final planned = node?.meeting?['mode'] as String?;
+    if (planned == 'online' || planned == 'in_person') return planned!;
+    return _selectedEmployee?['work_location_type'] == 'Remote' ? 'online' : 'in_person';
+  }
+
+  /// Pencil on the orientation / exit interview step: plan the time and format.
+  /// Before Start it is only saved; after Start the booked meeting is moved.
+  Future<void> _openMeetingPlan(OnboardingFlowNode node) async {
+    if (_selectedEmployee == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Choose an employee at the top first — this step needs someone to schedule for.')),
+      );
+      return;
+    }
+    final started = _selectedEmployee != null && _runById.isNotEmpty;
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (_) => SchedulingDialog(
+        apiBaseUrl: widget.apiBaseUrl,
+        hrToken: widget.hrToken,
+        sessionType: 'orientation',
+        title: 'Orientation',
+        employeeId: _selectedEmployee?['employee_id'] as String?,
+        employeeName: _selectedEmployee?['full_name'] as String?,
+        employeePhotoUrl: _selectedEmployee?['profile_image_url'] as String?,
+        planNode: node,
+        process: 'onboarding',
+        employee: _selectedEmployee,
+        planStarted: started,
+        booked: _runById[node.id]?['booked'] as String?,
+      ),
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      node.when = result['when'] as Map<String, dynamic>?;
+      node.meeting = Map<String, dynamic>.from(result['meeting'] as Map);
+    });
+    _markDirty();
+    await _save();
+    if (!started || !mounted) return;
+    try {
+      final message = await _api.rebookFlowMeeting('onboarding', _selectedEmployee!['employee_id'] as String);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+    await _loadRun();
+  }
+
+  /// Opens the timing dialog for a step and saves the flow with the new "when".
+  Future<void> _editTiming(OnboardingFlowNode node) async {
+    final result = await showWhenDialog(
+      context,
+      node: node,
+      process: 'onboarding',
+      apiBaseUrl: widget.apiBaseUrl,
+      employee: _selectedEmployee,
+    );
+    if (result == null || !mounted) return;
+    setState(() => node.when = result['mode'] == 'now' ? null : result);
+    _markDirty();
+    await _save();
+  }
+
   void _deleteStep(List<OnboardingFlowNode> list, OnboardingFlowNode node) {
     setState(() => list.remove(node));
     _markDirty();
   }
 
+  /// "Complete" always closes the flow: it can't be moved, and nothing can be moved below it.
+  bool _isFixedStep(OnboardingFlowNode n) => n.icon == 'ti-flag';
+
   void _toggleReorder(String nodeId) {
+    final node = _nodes.where((n) => n.id == nodeId).firstOrNull;
+    if (node != null && _isFixedStep(node)) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('This step always comes last.')));
+      return;
+    }
     setState(() => _reorderingNodeId = _reorderingNodeId == nodeId ? null : nodeId);
+  }
+
+  bool _canMove(List<OnboardingFlowNode> list, int from, int delta) {
+    final to = from + delta;
+    return from != -1 && to >= 0 && to < list.length && !_isFixedStep(list[to]) && !_isFixedStep(list[from]);
   }
 
   void _moveNode(List<OnboardingFlowNode> list, OnboardingFlowNode node, int delta) {
     final from = list.indexOf(node);
     final to = from + delta;
-    if (from == -1 || to < 0 || to >= list.length) return;
+    if (!_canMove(list, from, delta)) return;
     setState(() {
       list.removeAt(from);
       list.insert(to, node);
@@ -344,34 +513,67 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     if (_selectedEmployee == null) return;
     final employeeId = _selectedEmployee!['employee_id'] as String;
 
+    // Review first: every step in order. Nothing starts unless HR confirms.
+    setState(() => _startingOnboarding = true);
+    Map<String, dynamic> review;
+    try {
+      review = await _api.getStartReview('onboarding', employeeId);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _startingOnboarding = false);
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.toString()), backgroundColor: SelmsColors.rose));
+      }
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _startingOnboarding = false);
+    final confirmed = await showStartReview(context, review: review, apiBaseUrl: widget.apiBaseUrl);
+    if (confirmed == null || !mounted) return;
+
+    // The orientation format is planned with the pencil on that step.
+    final mode = _plannedMeetingMode('Schedule orientation');
+
     setState(() => _startingOnboarding = true);
     try {
-      final result = await _api.autoStartOnboarding(employeeId);
+      // The reviewed email is saved first, so Start sends it straight away.
+      if (confirmed.isNotEmpty) {
+        await _api.saveOnboardingEmail(employeeId, confirmed['subject']!, confirmed['body']!);
+      }
+      final result = await _api.autoStartOnboarding(employeeId, mode: mode);
       if (!mounted) return;
+      // The flow runs straight through, so the banner reports what ran and
+      // the first step still waiting on a person.
       final orientation = result.orientation;
-      final scheduleLine = !result.scheduleEnabled
-          ? "Orientation not scheduled — 'Schedule orientation' step removed from this employee's flow."
-          : orientation == null
-              ? 'No free orientation slot found in the next 14 days — schedule manually.'
-              : 'Orientation auto-booked for ${orientation['date']} at ${orientation['start_time']}.';
-      final itLine = result.itNotified
-          ? 'IT notified.'
-          : "IT not notified — 'Notify IT' step removed from this employee's flow.";
-      final banner = '$scheduleLine\n$itLine';
+      final lines = <String>[
+        'Onboarding started — the flow has run through its steps.',
+        if (result.currentStep != null) 'Still to do: ${result.currentStep}.',
+        if (result.emailSent) 'The saved onboarding email was sent.',
+        if (result.itNotified) 'IT has been notified.',
+        if (orientation != null) 'Orientation booked for ${orientation['date']} at ${orientation['start_time']}.',
+        if (result.meetingWarning != null) result.meetingWarning!,
+      ];
 
-      await showDialog<void>(
-        context: context,
-        builder: (_) => _EmailStepDialog(
-          apiBaseUrl: widget.apiBaseUrl,
-          hrToken: widget.hrToken,
-          employeeId: employeeId,
-          title: 'Welcome email',
-          initialSubject: result.subject,
-          initialBody: result.body,
-          banner: banner,
-        ),
-      );
-      if (mounted) await _loadCandidatesThenFlow();
+      if (result.subject.isNotEmpty) {
+        await showDialog<void>(
+          context: context,
+          builder: (_) => _EmailStepDialog(
+            apiBaseUrl: widget.apiBaseUrl,
+            hrToken: widget.hrToken,
+            employeeId: employeeId,
+            title: 'Welcome email',
+            initialSubject: result.subject,
+            initialBody: result.body,
+            banner: lines.join('\n'),
+          ),
+        );
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(lines.join(' '))));
+      }
+      if (mounted) {
+        await _loadCandidatesThenFlow();
+        await _loadRun();
+      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
@@ -466,6 +668,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         hrToken: widget.hrToken,
         employeeId: _selectedEmployee!['employee_id'] as String,
         title: node.label,
+        when: node.when,
       ),
     );
   }
@@ -482,10 +685,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       builder: (_) => SchedulingDialog(
         apiBaseUrl: widget.apiBaseUrl,
         hrToken: widget.hrToken,
-        sessionType: 'orientation',
+        // Only the locked step books the real orientation; a meeting added with "+"
+        // is an extra and must never count as it.
+        sessionType: node.locked ? 'orientation' : 'other',
         title: node.label,
         employeeId: _selectedEmployee!['employee_id'] as String,
         employeeName: _selectedEmployee!['full_name'] as String,
+        employeePhotoUrl: _selectedEmployee!['profile_image_url'] as String?,
       ),
     ).then((booked) {
       if (booked == true && mounted) {
@@ -510,20 +716,23 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         return Icons.chat_bubble_outline;
       case 'ti-git-branch':
         return Icons.call_split;
+      case 'ti-flag':
+        return Icons.flag_outlined;
+      case 'ti-file-text':
+        return Icons.description_outlined;
+      case 'ti-clipboard-list':
+        return Icons.fact_check_outlined;
       case 'ti-truck-delivery':
         return Icons.local_shipping_outlined;
       case 'ti-package':
         return Icons.inventory_2_outlined;
+      case 'ti-map-pin':
+        return Icons.place_outlined;
+      case 'ti-device-laptop':
+        return Icons.laptop_mac_outlined;
       default:
         return Icons.circle_outlined;
     }
-  }
-
-  String _initials(String name) {
-    final parts = name.trim().split(RegExp(r'\s+'));
-    if (parts.isEmpty || parts.first.isEmpty) return '?';
-    if (parts.length == 1) return parts[0].substring(0, 1).toUpperCase();
-    return (parts.first.substring(0, 1) + parts.last.substring(0, 1)).toUpperCase();
   }
 
   // --- UI builders ---
@@ -568,16 +777,21 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         ),
         child: Row(
           children: [
-            Container(
-              width: 28,
-              height: 28,
-              decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-              alignment: Alignment.center,
-              child: hasSelection
-                  ? Text(_initials(_selectedEmployee!['full_name'] as String),
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: SelmsColors.ink))
-                  : const Icon(Icons.person_add_alt_1_outlined, size: 15, color: SelmsColors.ink),
-            ),
+            hasSelection
+                ? EmployeeAvatar(
+                    apiBaseUrl: widget.apiBaseUrl,
+                    name: _selectedEmployee!['full_name'] as String,
+                    photoUrl: _selectedEmployee!['profile_image_url'] as String?,
+                    size: 28,
+                    background: Colors.white,
+                  )
+                : Container(
+                    width: 28,
+                    height: 28,
+                    decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                    alignment: Alignment.center,
+                    child: const Icon(Icons.person_add_alt_1_outlined, size: 15, color: SelmsColors.ink),
+                  ),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -610,19 +824,40 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final isReordering = _reorderingNodeId == node.id;
     final index = parentList.indexOf(node);
 
+    // Where this step is in the picked employee's run (null = no run yet).
+    final run = _runById[node.id];
+    final runState = run?['state'] as String?;
+    final isDone = runState == 'done';
+    final isCurrent = runState == 'current';
+    // The End step looks like the "Choose employee" box: light blue with a dark outline.
+    final isEnd = node.icon == 'ti-flag';
+    final hint = run?['hint'] as String?;
+    // Steps only a person can finish (HR's own custom steps) get a button.
+    final canTick = isCurrent && run?['kind'] == 'hr' && node.label != 'Send welcome email';
+
     return GestureDetector(
-      onTap: isEmailStep
-          ? () => _openEmailPopup(node)
-          : isScheduleStep
-              ? () => _openSchedulingPopup(node)
-              : null,
       onDoubleTap: () => _toggleReorder(node.id),
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: isReordering ? SelmsColors.accentBg : Colors.white,
-          border: Border.all(color: isReordering ? SelmsColors.ink : SelmsColors.border),
+          color: isEnd
+              ? SelmsColors.accentBg
+              : isReordering
+              ? SelmsColors.accentBg
+              : isDone
+                  ? SelmsColors.statusActiveBg.withValues(alpha: 0.45)
+                  : isCurrent
+                      ? SelmsColors.accentBg
+                      : Colors.white,
+          border: Border.all(
+            color: isEnd || isReordering || isCurrent
+                ? SelmsColors.ink
+                : isDone
+                    ? SelmsColors.statusActiveText.withValues(alpha: 0.35)
+                    : SelmsColors.border,
+            width: isCurrent && !isEnd ? 1.6 : 1,
+          ),
           borderRadius: BorderRadius.circular(10),
         ),
         child: Row(
@@ -631,14 +866,25 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               width: 28,
               height: 28,
               decoration: BoxDecoration(
-                color: isCondition ? const Color(0xFFF1EFE8) : SelmsColors.accentBg,
-                borderRadius: BorderRadius.circular(7),
+                color: isEnd
+                    ? Colors.white
+                    : isDone
+                        ? SelmsColors.statusActiveBg
+                        : isCondition
+                            ? const Color(0xFFF1EFE8)
+                            : SelmsColors.accentBg,
+                shape: isEnd ? BoxShape.circle : BoxShape.rectangle,
+                borderRadius: isEnd ? null : BorderRadius.circular(7),
               ),
               alignment: Alignment.center,
               child: Icon(
-                isCondition ? Icons.call_split : _iconFor(node.icon),
+                isDone ? Icons.check : (isCondition ? Icons.call_split : _iconFor(node.icon)),
                 size: 15,
-                color: isCondition ? const Color(0xFF444441) : SelmsColors.ink,
+                color: isDone
+                    ? SelmsColors.statusActiveText
+                    : isCondition
+                        ? const Color(0xFF444441)
+                        : SelmsColors.ink,
               ),
             ),
             const SizedBox(width: 10),
@@ -653,14 +899,78 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                             style: const TextStyle(
                                 fontSize: 12, fontWeight: FontWeight.w500, color: SelmsColors.textPrimary)),
                       ),
-                      if (isEmailStep || isScheduleStep) ...[
-                        const SizedBox(width: 6),
-                        const Icon(Icons.open_in_new, size: 11, color: SelmsColors.textMuted),
-                      ],
                     ],
                   ),
                   if (node.sub != null)
                     Text(node.sub!, style: const TextStyle(fontSize: 10, color: SelmsColors.textMuted)),
+                  // Timing - only on the steps where "when" matters most.
+                  // (Meeting steps - orientation / exit interview and "+" meetings - use the pencil, so no line here.)
+                  if (supportsTiming(node, 'onboarding') && node.icon != 'ti-calendar')
+                    Padding(
+                      padding: const EdgeInsets.only(top: 5),
+                      child: InkWell(
+                        onTap: () => _editTiming(node),
+                        borderRadius: BorderRadius.circular(12),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            border: Border.all(color: SelmsColors.border),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.schedule, size: 11, color: SelmsColors.textSecondary),
+                              const SizedBox(width: 4),
+                              Text(whenSummary(node.when, 'onboarding'),
+                                  style: const TextStyle(fontSize: 10.5, color: SelmsColors.textSecondary)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  // A booked meeting: the real date and time (and why, if it moved from the chosen time).
+                  if (isDone && run?['booked'] != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Text(run!['booked'] as String,
+                          style: const TextStyle(
+                              fontSize: 10.5, fontWeight: FontWeight.w500, color: SelmsColors.statusActiveText)),
+                    ),
+                  if (isCurrent && hint != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.hourglass_top, size: 11, color: SelmsColors.ink),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Text('Now: $hint',
+                                style: const TextStyle(
+                                    fontSize: 10.5, fontWeight: FontWeight.w500, color: SelmsColors.ink)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (canTick)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: SizedBox(
+                        height: 26,
+                        child: ElevatedButton(
+                          onPressed: _completingStepId == node.id ? null : () => _completeStep(node.id),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF16A34A),
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            textStyle: const TextStyle(fontSize: 11),
+                          ),
+                          child: Text(_completingStepId == node.id ? 'Saving…' : 'Mark done'),
+                        ),
+                      ),
+                    ),
                   if (isReordering)
                     const Padding(
                       padding: EdgeInsets.only(top: 2),
@@ -672,36 +982,52 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             ),
             if (isReordering) ...[
               InkWell(
-                onTap: index > 0 ? () => _moveNode(parentList, node, -1) : null,
+                onTap: _canMove(parentList, index, -1) ? () => _moveNode(parentList, node, -1) : null,
                 child: Padding(
                   padding: const EdgeInsets.all(4),
                   child: Icon(Icons.keyboard_arrow_up, size: 18,
-                      color: index > 0 ? SelmsColors.ink : SelmsColors.border),
+                      color: _canMove(parentList, index, -1) ? SelmsColors.ink : SelmsColors.border),
                 ),
               ),
               InkWell(
-                onTap: index < parentList.length - 1 ? () => _moveNode(parentList, node, 1) : null,
+                onTap: _canMove(parentList, index, 1) ? () => _moveNode(parentList, node, 1) : null,
                 child: Padding(
                   padding: const EdgeInsets.all(4),
                   child: Icon(Icons.keyboard_arrow_down, size: 18,
-                      color: index < parentList.length - 1 ? SelmsColors.ink : SelmsColors.border),
+                      color: _canMove(parentList, index, 1) ? SelmsColors.ink : SelmsColors.border),
                 ),
               ),
             ],
-            InkWell(
-              onTap: () => _editStep(node),
-              child: const Padding(
+            if (node.locked) ...[
+              // Locked steps with settings (Documents, Survey) can be edited but never removed.
+              if (node.step != null || isEmailStep || isScheduleStep)
+                InkWell(
+                  onTap: () => _editStep(node),
+                  child: const Padding(
+                    padding: EdgeInsets.all(4),
+                    child: Icon(Icons.edit_outlined, size: 15, color: SelmsColors.textSecondary),
+                  ),
+                ),
+              const Padding(
                 padding: EdgeInsets.all(4),
-                child: Icon(Icons.edit_outlined, size: 15, color: SelmsColors.textSecondary),
+                child: Icon(Icons.lock_outline, size: 15, color: SelmsColors.textMuted),
               ),
-            ),
-            InkWell(
-              onTap: () => _deleteStep(parentList, node),
-              child: const Padding(
-                padding: EdgeInsets.all(4),
-                child: Icon(Icons.close, size: 15, color: SelmsColors.rose),
+            ] else ...[
+              InkWell(
+                onTap: () => _editStep(node),
+                child: const Padding(
+                  padding: EdgeInsets.all(4),
+                  child: Icon(Icons.edit_outlined, size: 15, color: SelmsColors.textSecondary),
+                ),
               ),
-            ),
+              InkWell(
+                onTap: () => _deleteStep(parentList, node),
+                child: const Padding(
+                  padding: EdgeInsets.all(4),
+                  child: Icon(Icons.close, size: 15, color: SelmsColors.rose),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -748,7 +1074,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           ],
         ));
       }
-      children.add(_connector(() => _addStep(nodes, i + 1, allowCondition: allowCondition)));
+      // The End step closes the flow, so there is no "+" after it.
+      if (node.icon != 'ti-flag') {
+        children.add(_connector(() => _addStep(nodes, i + 1, allowCondition: allowCondition)));
+      }
     }
     return Column(children: children);
   }
@@ -811,23 +1140,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     ),
                     const SizedBox(width: 10),
                   ],
-                  OutlinedButton(
-                    onPressed: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => OnboardingStepperScreen(
-                            apiBaseUrl: widget.apiBaseUrl,
-                            hrToken: widget.hrToken,
-                            employeeId: _selectedEmployee!['employee_id'] as String,
-                            fullName: _selectedEmployee!['full_name'] as String,
-                          ),
-                        ),
-                      );
-                    },
-                    style: OutlinedButton.styleFrom(side: const BorderSide(color: SelmsColors.border)),
-                    child: const Text('View checklist', style: TextStyle(fontSize: 12)),
-                  ),
-                  const SizedBox(width: 10),
                 ],
                 OutlinedButton(
                   onPressed: (_dirty && !_saving) ? _save : null,
@@ -846,76 +1158,152 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               ],
             ),
             const SizedBox(height: 18),
-            if (!_loadingActive && _activeOnboarding.isNotEmpty) ...[
-              _activeOnboardingList(),
-              const SizedBox(height: 18),
-            ],
-            Expanded(child: _buildBody()),
+            // The flow chart keeps all the width it had; the history panel
+            // sits beside it instead of above it, so it never shrinks the chart.
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: _buildBody()),
+                  const SizedBox(width: 14),
+                  _onboardingHistoryPanel(),
+                ],
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 
-  /// Simple bird's-eye view — one row per employee currently onboarding,
-  /// a progress bar, and a percentage. Tap a row to open their full
-  /// step-by-step checklist (OnboardingStepperScreen, already built).
-  Widget _activeOnboardingList() {
+  /// Compact side panel: everyone who has been put through onboarding,
+  /// newest first, with a small progress bar (a full bar + check = done).
+  /// Tap a person to open their step-by-step checklist.
+  Widget _onboardingHistoryPanel() {
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
+      width: 270,
+      margin: const EdgeInsets.only(bottom: 24),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 8),
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Active Onboarding (${_activeOnboarding.length})',
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: SelmsColors.textPrimary)),
-          const SizedBox(height: 10),
-          ..._activeOnboarding.map((e) {
-            final progress = (e['progress_percent'] as num).toInt();
-            return InkWell(
-              onTap: () => _openStepperFor(e),
-              borderRadius: BorderRadius.circular(8),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 160,
-                      child: Text(e['full_name'] as String? ?? '',
-                          style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500),
-                          overflow: TextOverflow.ellipsis),
-                    ),
-                    SizedBox(
-                      width: 110,
-                      child: Text(e['department'] as String? ?? '',
-                          style: const TextStyle(fontSize: 11.5, color: SelmsColors.textMuted),
-                          overflow: TextOverflow.ellipsis),
-                    ),
-                    Expanded(
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(6),
-                        child: LinearProgressIndicator(
-                          value: progress / 100,
-                          minHeight: 6,
-                          backgroundColor: SelmsColors.border,
-                          valueColor: const AlwaysStoppedAnimation(SelmsColors.ink),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    SizedBox(
-                      width: 36,
-                      child: Text('$progress%',
-                          textAlign: TextAlign.right,
-                          style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600)),
-                    ),
-                  ],
-                ),
+          Row(
+            children: [
+              const Expanded(
+                child: Text('Onboarding history',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: SelmsColors.textPrimary)),
               ),
-            );
-          }),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(color: SelmsColors.accentBg, borderRadius: BorderRadius.circular(10)),
+                child: Text('${_activeOnboarding.where((e) => e['completed'] != true).length}',
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: SelmsColors.ink)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          const Text('Tap a person to open their checklist.',
+              style: TextStyle(fontSize: 11, color: SelmsColors.textMuted)),
+          const SizedBox(height: 8),
+          const Divider(height: 1, color: SelmsColors.border),
+          Expanded(
+            child: _loadingActive
+                ? const Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)))
+                : _activeOnboarding.isEmpty
+                    ? const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(12),
+                          child: Text('No one has been onboarded yet.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(fontSize: 12, color: SelmsColors.textMuted)),
+                        ),
+                      )
+                    : _historySections(_activeOnboarding),
+          ),
         ],
+      ),
+    );
+  }
+
+  /// "In progress" first, then "Completed" (with the date it finished).
+  Widget _historySections(List<Map<String, dynamic>> all) {
+    final inProgress = all.where((e) => e['completed'] != true).toList();
+    final completed = all.where((e) => e['completed'] == true).toList();
+    Widget header(String text, int n) => Padding(
+          padding: const EdgeInsets.only(top: 10, bottom: 4),
+          child: Text('$text  ·  $n',
+              style: const TextStyle(
+                  fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 0.6, color: SelmsColors.textMuted)),
+        );
+    final children = <Widget>[];
+    void addRows(List<Map<String, dynamic>> rows) {
+      for (var i = 0; i < rows.length; i++) {
+        if (i > 0) children.add(const Divider(height: 1, color: SelmsColors.border));
+        children.add(_historyRow(rows[i]));
+      }
+    }
+
+    if (inProgress.isNotEmpty) {
+      children.add(header('IN PROGRESS', inProgress.length));
+      addRows(inProgress);
+    }
+    if (completed.isNotEmpty) {
+      children.add(header('COMPLETED', completed.length));
+      addRows(completed);
+    }
+    return ListView(padding: EdgeInsets.zero, children: children);
+  }
+
+  Widget _historyRow(Map<String, dynamic> e) {
+    final progress = (e['progress_percent'] as num).toInt();
+    final done = progress >= 100;
+    final name = e['full_name'] as String? ?? '';
+    return InkWell(
+      onTap: () => _openStepperFor(e),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            EmployeeAvatar(
+              apiBaseUrl: widget.apiBaseUrl,
+              name: name,
+              photoUrl: e['profile_image_url'] as String?,
+              size: 30,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(name,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500)),
+                  Text('${e['employee_id'] ?? ''} · ${e['department'] ?? ''}',
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 10.5, color: SelmsColors.textMuted)),
+                  if (e['completed'] == true && (e['completed_at'] as String?) != null)
+                    Text('Completed ${(e['completed_at'] as String).substring(0, 10)}',
+                        style: const TextStyle(fontSize: 10.5, color: Color(0xFF047857), fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 5),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: progress / 100,
+                      minHeight: 4,
+                      backgroundColor: SelmsColors.border,
+                      valueColor: AlwaysStoppedAnimation(done ? const Color(0xFF10B981) : SelmsColors.ink),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            done
+                ? const Icon(Icons.check_circle, size: 16, color: Color(0xFF10B981))
+                : Text('$progress%', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+          ],
+        ),
       ),
     );
   }
@@ -925,18 +1313,30 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     if (_error != null) {
       return Center(child: Text(_error!, style: const TextStyle(color: SelmsColors.rose, fontSize: 13)));
     }
-    return SingleChildScrollView(
-      child: Center(
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 520),
-          margin: const EdgeInsets.only(bottom: 24),
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
-          child: Column(
-            children: [
-              _employeePickerNode(),
-              _stepList(_nodes, allowCondition: true),
-            ],
+    // The card fills the space up to the history panel (a small gap, like two
+    // cards side by side) instead of floating centred in empty space; the
+    // flow itself stays at its normal 520px width, centred inside the card.
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight - 24),
+          child: Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(bottom: 24),
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 520),
+                child: Column(
+                  children: [
+                    _employeePickerNode(),
+                    _stepList(_nodes, allowCondition: true),
+                  ],
+                ),
+              ),
+            ),
           ),
         ),
       ),
@@ -957,6 +1357,7 @@ class _EmailStepDialog extends StatefulWidget {
     this.initialSubject,
     this.initialBody,
     this.banner,
+    this.when,
   });
 
   final String apiBaseUrl;
@@ -974,6 +1375,9 @@ class _EmailStepDialog extends StatefulWidget {
   /// auto-booked orientation slot.
   final String? banner;
 
+  /// The step's timing, so the dialog can say when the saved email goes out.
+  final Map<String, dynamic>? when;
+
   @override
   State<_EmailStepDialog> createState() => _EmailStepDialogState();
 }
@@ -987,6 +1391,8 @@ class _EmailStepDialogState extends State<_EmailStepDialog> {
   bool _loadingDraft = true;
   bool _regenerating = false;
   bool _sending = false;
+  bool _alreadySent = false;
+  bool _started = false;
   String? _error;
 
   @override
@@ -995,6 +1401,7 @@ class _EmailStepDialogState extends State<_EmailStepDialog> {
     if (widget.initialSubject != null && widget.initialBody != null) {
       _subjectCtrl.text = widget.initialSubject!;
       _bodyCtrl.text = widget.initialBody!;
+      _started = true; // opened by the Start button
       _loadingDraft = false;
     } else {
       _loadDraft();
@@ -1022,8 +1429,10 @@ class _EmailStepDialogState extends State<_EmailStepDialog> {
       final draft = await _api.draftOnboardingEmail(widget.employeeId, instruction: instruction);
       if (!mounted) return;
       setState(() {
-        _subjectCtrl.text = draft['subject'] ?? '';
-        _bodyCtrl.text = draft['body'] ?? '';
+        _subjectCtrl.text = (draft['subject'] as String?) ?? '';
+        _bodyCtrl.text = (draft['body'] as String?) ?? '';
+        _alreadySent = draft['sent'] == true;
+        _started = draft['started'] == true;
       });
     } catch (e) {
       if (!mounted) return;
@@ -1038,7 +1447,17 @@ class _EmailStepDialogState extends State<_EmailStepDialog> {
     }
   }
 
-  Future<void> _send() async {
+  String _caption() {
+    if (_alreadySent) return 'This email was already sent.';
+    if (!_started) return 'Review and edit, then Save. It is sent when you click Start onboarding.';
+    final at = whenDateTime(widget.when);
+    if (at != null && at.isAfter(DateTime.now())) {
+      return 'Review and edit, then Save. SELMS sends it on ${whenAtText(widget.when)}.';
+    }
+    return 'Review and edit, then Save. The flow sends it as soon as this step runs.';
+  }
+
+  Future<void> _save() async {
     if (_subjectCtrl.text.trim().isEmpty || _bodyCtrl.text.trim().isEmpty) {
       setState(() => _error = 'Subject and body are required.');
       return;
@@ -1048,7 +1467,7 @@ class _EmailStepDialogState extends State<_EmailStepDialog> {
       _error = null;
     });
     try {
-      final message = await _api.sendOnboardingEmail(
+      final message = await _api.saveOnboardingEmail(
           widget.employeeId, _subjectCtrl.text.trim(), _bodyCtrl.text.trim());
       if (!mounted) return;
       Navigator.of(context).pop();
@@ -1089,8 +1508,7 @@ class _EmailStepDialogState extends State<_EmailStepDialog> {
                 ],
               ),
               const SizedBox(height: 4),
-              const Text('AI-drafted — review before sending.',
-                  style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
+              Text(_caption(), style: const TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
               if (widget.banner != null) ...[
                 const SizedBox(height: 10),
                 Container(
@@ -1169,12 +1587,12 @@ class _EmailStepDialogState extends State<_EmailStepDialog> {
                   ),
                   const SizedBox(width: 10),
                   ElevatedButton(
-                    onPressed: (_loadingDraft || _sending) ? null : _send,
+                    onPressed: (_loadingDraft || _sending || _alreadySent) ? null : _save,
                     style: ElevatedButton.styleFrom(backgroundColor: SelmsColors.ink, foregroundColor: Colors.white),
                     child: _sending
                         ? const SizedBox(
                             width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                        : const Text('Send'),
+                        : const Text('Save'),
                   ),
                 ],
               ),

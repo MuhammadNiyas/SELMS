@@ -13,7 +13,13 @@ import 'theme/selms_colors.dart';
 /// host machine's localhost". iOS simulators, unlike Android, can use
 /// localhost directly since they share the host's network stack.
 String _defaultApiBaseUrl() {
-  if (kIsWeb) return 'http://localhost:5000';
+  // On web, reuse whatever host the page itself was loaded from, so the
+  // same build works on the laptop (localhost) and on a phone that opened
+  // it via the laptop's LAN IP (e.g. 192.168.1.20).
+  if (kIsWeb) {
+    final host = Uri.base.host;
+    return 'http://${host.isEmpty ? 'localhost' : host}:5000';
+  }
   if (Platform.isAndroid) return 'http://10.0.2.2:5000';
   return 'http://localhost:5000';
 }

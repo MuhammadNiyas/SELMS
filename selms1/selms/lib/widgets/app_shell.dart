@@ -4,6 +4,7 @@
 // Pass a `child` for the page body; AppShell handles the sidebar (which can
 // collapse for a full-width view), nav highlighting, and log out.
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../theme/selms_colors.dart';
 import '../services/api_client.dart';
@@ -12,11 +13,16 @@ import '../screens/dashboard_screen.dart';
 import '../screens/employee_directory_screen.dart';
 import '../screens/onboarding_screen.dart';
 import '../screens/offboarding_screen.dart';
+import '../screens/lifecycle_insights_screen.dart';
+import '../screens/hr_shipments_screen.dart';
 import '../screens/smart_schedule_screen.dart';
 import '../screens/hr_messages_screen.dart';
+import '../screens/employee_view_screen.dart';
+import '../screens/it_messages_screen.dart';
+import '../screens/it_products_screen.dart';
 import 'chat_panel.dart';
 
-enum SelmsRoute { dashboard, employees, onboarding, offboarding, smartSchedule, messages }
+enum SelmsRoute { dashboard, employees, onboarding, offboarding, insights, shipments, products, smartSchedule, messages }
 
 class AppShell extends StatefulWidget {
   const AppShell({
@@ -43,6 +49,7 @@ class _AppShellState extends State<AppShell> {
   void _openChat() {
     if (_chatOpen) return;
     setState(() => _chatOpen = true);
+    final api = ApiClient(baseUrl: widget.apiBaseUrl, hrToken: widget.hrToken);
     showDialog<void>(
       context: context,
       barrierDismissible: true,
@@ -57,9 +64,11 @@ class _AppShellState extends State<AppShell> {
           child: ChatPanel(
             title: 'SELMS Admin Assistant',
             hint: "Hi! I'm your SELMS Admin Assistant. How can I help you today?",
-            suggestions: const ['overdue', 'offboarding', 'equipment', 'reminder'],
-            onSend: (message, history) =>
-                ApiClient(baseUrl: widget.apiBaseUrl, hrToken: widget.hrToken).hrChat(message, history),
+            suggestions: const ['overdue', 'offboarding', 'equipment', 'what documents do we have?'],
+            onSend: api.hrChat,
+            documentUrl: api.documentDownloadUrl,
+            onUpload: (name, bytes, title) => api.uploadDocument(name, bytes, title: title),
+            onDeleteDocument: api.deleteDocument,
           ),
         ),
       ),
@@ -70,6 +79,15 @@ class _AppShellState extends State<AppShell> {
 
   @override
   Widget build(BuildContext context) {
+    return SelmsSession(
+      apiBaseUrl: widget.apiBaseUrl,
+      token: widget.hrToken,
+      role: 'hr',
+      child: _buildShell(context),
+    );
+  }
+
+  Widget _buildShell(BuildContext context) {
     return Scaffold(
       backgroundColor: SelmsColors.accentBg,
       body: Stack(
@@ -167,21 +185,9 @@ class _Sidebar extends StatelessWidget {
             padding: const EdgeInsets.only(left: 6, bottom: 24),
             child: Row(
               children: [
-                Container(
-                  width: 30,
-                  height: 30,
-                  decoration: BoxDecoration(
-                    color: SelmsColors.accentBg,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  alignment: Alignment.center,
-                  child: const Text('S',
-                      style: TextStyle(
-                          color: SelmsColors.ink, fontWeight: FontWeight.bold, fontSize: 14)),
-                ),
-                const SizedBox(width: 10),
                 const Text('SELMS',
-                    style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
+                    style: TextStyle(
+                        color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
                 const Spacer(),
                 InkWell(
                   onTap: onCollapse,
@@ -247,6 +253,19 @@ class _Sidebar extends StatelessWidget {
             },
           ),
           _NavItem(
+            icon: Icons.insights_outlined,
+            label: 'Lifecycle Insights',
+            active: activeRoute == SelmsRoute.insights,
+            onTap: () {
+              if (activeRoute == SelmsRoute.insights) return;
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(
+                  builder: (_) => LifecycleInsightsScreen(apiBaseUrl: apiBaseUrl, hrToken: hrToken),
+                ),
+              );
+            },
+          ),
+          _NavItem(
             icon: Icons.calendar_month_outlined,
             label: 'Smart Schedule',
             active: activeRoute == SelmsRoute.smartSchedule,
@@ -255,6 +274,33 @@ class _Sidebar extends StatelessWidget {
               Navigator.of(context).pushReplacement(
                 MaterialPageRoute(
                   builder: (_) => SmartScheduleScreen(apiBaseUrl: apiBaseUrl, hrToken: hrToken),
+                ),
+              );
+            },
+          ),
+          _NavItem(
+            icon: Icons.local_shipping_outlined,
+            label: 'Shipments',
+            active: activeRoute == SelmsRoute.shipments,
+            onTap: () {
+              if (activeRoute == SelmsRoute.shipments) return;
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(
+                  builder: (_) => HrShipmentsScreen(apiBaseUrl: apiBaseUrl, hrToken: hrToken),
+                ),
+              );
+            },
+          ),
+          _NavItem(
+            icon: Icons.inventory_2_outlined,
+            label: 'Products',
+            active: activeRoute == SelmsRoute.products,
+            onTap: () {
+              if (activeRoute == SelmsRoute.products) return;
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(
+                  // IT's product list, view only for HR.
+                  builder: (_) => ItProductsScreen(apiBaseUrl: apiBaseUrl, itToken: hrToken, viewOnly: true),
                 ),
               );
             },
@@ -319,12 +365,16 @@ class _NavItem extends StatelessWidget {
           children: [
             Icon(icon, size: 18, color: active ? SelmsColors.ink : SelmsColors.sidebarIconInactive),
             const SizedBox(width: 10),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 13.5,
-                color: active ? SelmsColors.ink : SelmsColors.sidebarInactive,
-                fontWeight: active ? FontWeight.w500 : FontWeight.w400,
+            Expanded(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 13.5,
+                  color: active ? SelmsColors.ink : SelmsColors.sidebarInactive,
+                  fontWeight: active ? FontWeight.w500 : FontWeight.w400,
+                ),
               ),
             ),
           ],
@@ -332,6 +382,30 @@ class _NavItem extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Gives widgets inside a shell (HR or IT) the API address, token and role,
+/// so shared pieces like the top bar's bell can call the backend without
+/// every screen having to pass them down.
+class SelmsSession extends InheritedWidget {
+  const SelmsSession({
+    super.key,
+    required this.apiBaseUrl,
+    required this.token,
+    required this.role,
+    required super.child,
+  });
+
+  final String apiBaseUrl;
+  final String token;
+  final String role; // 'hr' | 'it'
+
+  static SelmsSession? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<SelmsSession>();
+
+  @override
+  bool updateShouldNotify(SelmsSession old) =>
+      apiBaseUrl != old.apiBaseUrl || token != old.token || role != old.role;
 }
 
 /// Small top-right cluster (bell + avatar + "Admin") reused on every page.
@@ -343,13 +417,7 @@ class TopBarActions extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(
-          width: 32,
-          height: 32,
-          decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-          alignment: Alignment.center,
-          child: const Icon(Icons.notifications_none, size: 16, color: SelmsColors.ink),
-        ),
+        const NotificationBell(),
         const SizedBox(width: 10),
         Container(
           width: 32,
@@ -360,6 +428,270 @@ class TopBarActions extends StatelessWidget {
         const Text('Admin',
             style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: SelmsColors.ink)),
       ],
+    );
+  }
+}
+
+/// The bell: unread count badge, and a list of notifications (FYI),
+/// reminders (please do this) and alerts (something is stuck) for the
+/// signed-in HR or IT user. Polls quietly so new items appear on their own.
+class NotificationBell extends StatefulWidget {
+  const NotificationBell({super.key});
+
+  @override
+  State<NotificationBell> createState() => _NotificationBellState();
+}
+
+class _NotificationBellState extends State<NotificationBell> {
+  List<Map<String, dynamic>> _items = [];
+  int _unread = 0;
+  Timer? _poll;
+  ApiClient? _api;
+  String _role = 'hr';
+  bool _started = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final session = SelmsSession.maybeOf(context);
+    if (session == null || _started) return;
+    _started = true;
+    _role = session.role;
+    _api = ApiClient(baseUrl: session.apiBaseUrl, hrToken: session.token);
+    _load();
+    _poll = Timer.periodic(const Duration(seconds: 30), (_) => _load());
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final api = _api;
+    if (api == null) return;
+    try {
+      final data = await api.getStaffNotifications();
+      if (!mounted) return;
+      setState(() {
+        _items = (data['notifications'] as List).cast<Map<String, dynamic>>();
+        _unread = (data['unread_count'] as num?)?.toInt() ?? 0;
+      });
+    } catch (_) {
+      // Quiet - the bell just keeps its last known state.
+    }
+  }
+
+  IconData _iconFor(String kind) => switch (kind) {
+        'reminder' => Icons.alarm,
+        'alert' => Icons.warning_amber_rounded,
+        _ => Icons.notifications_none,
+      };
+
+  Color _colorFor(String kind) => switch (kind) {
+        'reminder' => const Color(0xFFB45309),
+        'alert' => SelmsColors.rose,
+        _ => const Color(0xFF1D4ED8),
+      };
+
+  String _ago(String iso) {
+    final at = DateTime.tryParse(iso);
+    if (at == null) return '';
+    final d = DateTime.now().toUtc().difference(at.toUtc());
+    if (d.inMinutes < 1) return 'just now';
+    if (d.inMinutes < 60) return '${d.inMinutes}m ago';
+    if (d.inHours < 24) return '${d.inHours}h ago';
+    return '${d.inDays}d ago';
+  }
+
+  Future<void> _open(Map<String, dynamic> n) async {
+    final api = _api;
+    if (api != null && n['read'] != true) {
+      try {
+        await api.markStaffNotificationRead(n['id'] as String);
+      } catch (_) {}
+      await _load();
+    }
+    if (!mounted) return;
+    final link = (n['link'] as Map?)?.cast<String, dynamic>() ?? {};
+    final session = SelmsSession.maybeOf(context);
+    if (session == null) return;
+    Navigator.of(context).pop(); // close the list
+    if (link['type'] == 'employee' && _role == 'hr' && link['employee_id'] != null) {
+      Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => EmployeeViewScreen(
+          apiBaseUrl: session.apiBaseUrl,
+          hrToken: session.token,
+          employeeId: link['employee_id'] as String,
+        ),
+      ));
+    } else if (link['type'] == 'lifecycle' && _role == 'hr') {
+      Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => LifecycleInsightsScreen(apiBaseUrl: session.apiBaseUrl, hrToken: session.token),
+      ));
+    } else if (link['type'] == 'requests' && _role == 'it') {
+      Navigator.of(context).pushReplacement(MaterialPageRoute(
+        builder: (_) => ItMessagesScreen(apiBaseUrl: session.apiBaseUrl, itToken: session.token),
+      ));
+    }
+  }
+
+  Future<void> _showList() async {
+    await _load();
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      barrierColor: Colors.transparent,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => Align(
+          alignment: Alignment.topRight,
+          child: Padding(
+            padding: const EdgeInsets.only(top: 62, right: 24),
+            child: Material(
+              color: Colors.white,
+              elevation: 8,
+              borderRadius: BorderRadius.circular(14),
+              clipBehavior: Clip.antiAlias,
+              child: SizedBox(
+                width: 380,
+                height: 480,
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 14, 8, 10),
+                      child: Row(
+                        children: [
+                          const Expanded(
+                            child: Text('Notifications',
+                                style: TextStyle(
+                                    fontSize: 14, fontWeight: FontWeight.w600, color: SelmsColors.textPrimary)),
+                          ),
+                          if (_unread > 0)
+                            TextButton(
+                              onPressed: () async {
+                                try {
+                                  await _api?.markAllStaffNotificationsRead();
+                                } catch (_) {}
+                                await _load();
+                                setDialogState(() {});
+                              },
+                              child: const Text('Mark all read', style: TextStyle(fontSize: 12)),
+                            ),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1, color: SelmsColors.border),
+                    Expanded(
+                      child: _items.isEmpty
+                          ? const Center(
+                              child: Text("You're all caught up.",
+                                  style: TextStyle(fontSize: 12.5, color: SelmsColors.textMuted)),
+                            )
+                          : ListView.separated(
+                              itemCount: _items.length,
+                              separatorBuilder: (_, _) => const Divider(height: 1, color: SelmsColors.border),
+                              itemBuilder: (_, i) {
+                                final n = _items[i];
+                                final unread = n['read'] != true;
+                                final kind = n['kind'] as String? ?? 'notification';
+                                return InkWell(
+                                  onTap: () => _open(n),
+                                  child: Container(
+                                    color: unread ? SelmsColors.accentBg.withValues(alpha: 0.5) : null,
+                                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Container(
+                                          width: 30,
+                                          height: 30,
+                                          decoration: BoxDecoration(
+                                            color: _colorFor(kind).withValues(alpha: 0.12),
+                                            shape: BoxShape.circle,
+                                          ),
+                                          child: Icon(_iconFor(kind), size: 16, color: _colorFor(kind)),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(n['title'] as String? ?? '',
+                                                  style: TextStyle(
+                                                      fontSize: 12.5,
+                                                      fontWeight: unread ? FontWeight.w600 : FontWeight.w500,
+                                                      color: SelmsColors.textPrimary)),
+                                              const SizedBox(height: 2),
+                                              Text(n['message'] as String? ?? '',
+                                                  style: const TextStyle(
+                                                      fontSize: 11.5, height: 1.35, color: SelmsColors.textSecondary)),
+                                              const SizedBox(height: 4),
+                                              Text(_ago(n['at'] as String? ?? ''),
+                                                  style: const TextStyle(fontSize: 10.5, color: SelmsColors.textMuted)),
+                                            ],
+                                          ),
+                                        ),
+                                        if (unread)
+                                          Container(
+                                            margin: const EdgeInsets.only(top: 4, left: 6),
+                                            width: 8,
+                                            height: 8,
+                                            decoration:
+                                                const BoxDecoration(color: SelmsColors.rose, shape: BoxShape.circle),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    if (mounted) _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: _api == null ? null : _showList,
+      borderRadius: BorderRadius.circular(16),
+      child: SizedBox(
+        width: 36,
+        height: 36,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Container(
+              width: 32,
+              height: 32,
+              decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+              alignment: Alignment.center,
+              child: const Icon(Icons.notifications_none, size: 16, color: SelmsColors.ink),
+            ),
+            if (_unread > 0)
+              Positioned(
+                top: 0,
+                right: 0,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  constraints: const BoxConstraints(minWidth: 16),
+                  decoration: BoxDecoration(color: SelmsColors.rose, borderRadius: BorderRadius.circular(10)),
+                  child: Text(_unread > 99 ? '99+' : '$_unread',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 9.5, color: Colors.white, fontWeight: FontWeight.w700)),
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

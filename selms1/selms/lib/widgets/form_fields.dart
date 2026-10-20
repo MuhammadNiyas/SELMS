@@ -313,7 +313,13 @@ class ProfilePhotoField extends StatelessWidget {
     required this.fallbackInitials,
     required this.onChanged,
     this.existingImageUrl,
+    this.compact = false,
   });
+
+  /// A large centred avatar with a camera badge (the employee's own profile
+  /// header) instead of the circle-plus-buttons form row HR's forms use.
+  /// Same pick / crop / view / remove behaviour either way.
+  final bool compact;
 
   /// Bytes of a newly-picked photo. Takes priority over [existingImageUrl].
   final Uint8List? imageBytes;
@@ -368,8 +374,111 @@ class ProfilePhotoField extends StatelessWidget {
     );
   }
 
+  /// Compact mode's menu: view / replace / remove, or straight to the
+  /// picker when there's no photo yet.
+  Future<void> _compactTap(BuildContext context) async {
+    if (!_hasPhoto) return _pickAndAdjust(context);
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.white,
+      constraints: const BoxConstraints(maxWidth: 480),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            ListTile(
+              leading: const Icon(Icons.visibility_outlined),
+              title: const Text('View photo', style: TextStyle(fontSize: 14)),
+              onTap: () => Navigator.of(ctx).pop('view'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Choose a new photo', style: TextStyle(fontSize: 14)),
+              onTap: () => Navigator.of(ctx).pop('replace'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline, color: SelmsColors.rose),
+              title: const Text('Remove photo', style: TextStyle(fontSize: 14, color: SelmsColors.rose)),
+              onTap: () => Navigator.of(ctx).pop('remove'),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (!context.mounted) return;
+    switch (choice) {
+      case 'view':
+        _onCircleTap(context);
+      case 'replace':
+        await _pickAndAdjust(context);
+      case 'remove':
+        onChanged(null);
+    }
+  }
+
+  Widget _buildCompact(BuildContext context) {
+    Widget content;
+    if (imageBytes != null) {
+      content = Image.memory(imageBytes!, fit: BoxFit.cover, width: 92, height: 92);
+    } else if (existingImageUrl != null && existingImageUrl!.isNotEmpty) {
+      content = Image.network(existingImageUrl!, fit: BoxFit.cover, width: 92, height: 92,
+          errorBuilder: (_, _, _) => Text(fallbackInitials,
+              style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700, color: SelmsColors.ink)));
+    } else {
+      content = Text(fallbackInitials.isEmpty ? '?' : fallbackInitials,
+          style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700, color: SelmsColors.ink));
+    }
+    return Tooltip(
+      message: _hasPhoto ? 'Change photo' : 'Add a photo',
+      child: InkWell(
+        onTap: () => _compactTap(context),
+        customBorder: const CircleBorder(),
+        child: SizedBox(
+          width: 96,
+          height: 96,
+          child: Stack(
+            children: [
+              Container(
+                width: 92,
+                height: 92,
+                margin: const EdgeInsets.all(2),
+                clipBehavior: Clip.hardEdge,
+                decoration: BoxDecoration(
+                  color: SelmsColors.accentBg,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 3),
+                  boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 8)],
+                ),
+                alignment: Alignment.center,
+                child: content,
+              ),
+              Positioned(
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  width: 30,
+                  height: 30,
+                  decoration: BoxDecoration(
+                    color: SelmsColors.ink,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 2),
+                  ),
+                  child: const Icon(Icons.photo_camera_outlined, size: 15, color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (compact) return _buildCompact(context);
     return Row(
       children: [
         InkWell(

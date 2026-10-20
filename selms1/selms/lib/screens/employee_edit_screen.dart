@@ -1,7 +1,9 @@
 // lib/screens/employee_edit_screen.dart
 
 import 'dart:typed_data';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/employee.dart';
 import '../services/api_client.dart';
 import '../theme/selms_colors.dart';
@@ -12,7 +14,7 @@ const _genders = ['Male', 'Female'];
 const _maritalStatuses = ['Single', 'Married', 'Divorced', 'Widowed'];
 const _departments = ['HR', 'IT', 'Marketing', 'Finance', 'Operations'];
 const _employmentStatuses = ['Probation', 'Confirmed', 'Contract', 'Full-Time', 'Part-Time'];
-const _workLocationTypes = ['Onsite', 'Remote', 'Hybrid'];
+const _workLocationTypes = ['Onsite', 'Remote'];
 
 class EmployeeEditScreen extends StatefulWidget {
   const EmployeeEditScreen({
@@ -66,9 +68,12 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
   String? _workLocationType;
   final _baseSalary = TextEditingController();
   List<String> _equipment = [];
+  List<String> _equipmentOptions = []; // types IT has created equipment for
 
   final _workEmail = TextEditingController();
-  bool _resetPassword = false;
+  final _passwordCtrl = TextEditingController();
+  String? _passwordState; // 'temporary' | 'own' | 'unknown'
+  String _originalPassword = ''; // what the field showed on load
 
   String get _initials {
     final parts = _name.text.trim().split(RegExp(r'\s+'));
@@ -97,6 +102,9 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
   Future<void> _load() async {
     try {
       final e = await _api.getEmployee(widget.employeeId);
+      try {
+        _equipmentOptions = await _api.listEquipmentTypes(onlyExisting: true);
+      } catch (_) {}
       _name.text = e.fullName;
       _gender = e.gender;
       _dob = e.dateOfBirth != null ? DateTime.tryParse(e.dateOfBirth!) : null;
@@ -120,6 +128,9 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
       _workLocationType = e.workLocationType;
       _baseSalary.text = e.baseSalary != null ? formatThousands(e.baseSalary!.toStringAsFixed(0)) : '';
       _equipment = List.of(e.equipmentNeeded);
+      _passwordState = e.passwordState;
+      _originalPassword = e.temporaryPassword ?? '';
+      _passwordCtrl.text = _originalPassword;
       _workEmail.text = e.workEmail ?? '';
       if (mounted) setState(() => _loading = false);
     } catch (err) {
@@ -132,13 +143,28 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
     }
   }
 
+  /// 12 characters, no look-alikes (0/O, 1/l/I), with a symbol and a digit.
+  String _randomPassword() {
+    const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ', lower = 'abcdefghijkmnpqrstuvwxyz';
+    const digits = '23456789', symbols = '!@#\$%&*?';
+    final rnd = math.Random.secure();
+    String pick(String set) => set[rnd.nextInt(set.length)];
+    final chars = [pick(upper), pick(lower), pick(digits), pick(symbols)];
+    final all = upper + lower + digits + symbols;
+    while (chars.length < 12) {
+      chars.add(pick(all));
+    }
+    chars.shuffle(rnd);
+    return chars.join();
+  }
+
   Future<void> _save() async {
     setState(() {
       _saving = true;
       _saveError = null;
     });
     try {
-      await _api.updateEmployee(widget.employeeId, {
+      final temporaryPassword = await _api.updateEmployee(widget.employeeId, {
         'full_name': _name.text.trim(),
         'gender': _gender,
         'date_of_birth': _dob?.toIso8601String(),
@@ -163,26 +189,124 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
             _baseSalary.text.trim(),
         'equipment_needed': _equipment,
         'work_email': _workEmail.text.trim(),
-        if (_resetPassword) 'reset_password': true,
+        if (_passwordCtrl.text.trim().isNotEmpty && _passwordCtrl.text.trim() != _originalPassword)
+          'new_password': _passwordCtrl.text.trim(),
       });
 
       // Photo upload is separate (multipart) and best-effort — a failed
       // upload here shouldn't block the rest of the changes from saving.
+      String? photoError;
       if (_profilePhotoBytes != null) {
         try {
           await _api.uploadEmployeePhoto(widget.employeeId, _profilePhotoBytes!);
-        } catch (_) {
-          // Swallowed on purpose — see comment above.
+        } catch (e) {
+          // Still doesn't block the other changes, but say so instead of
+          // silently reporting "Changes saved" with the old photo.
+          photoError = e.toString();
         }
       }
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Changes saved.')));
+      // A reset produces a new temporary password - show it once so HR can
+      // pass it on (it also goes in the welcome email when onboarding starts).
+      if (temporaryPassword != null) {
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: Colors.white,
+            title: const Text('Password updated', style: TextStyle(fontSize: 15)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Temporary password:', style: TextStyle(fontSize: 12.5, color: SelmsColors.textSecondary)),
+                const SizedBox(height: 8),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: SelmsColors.accentBg,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: SelectableText(temporaryPassword,
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, fontFamily: 'monospace')),
+                ),
+                const SizedBox(height: 10),
+                const Text(
+                  'Give this to the employee. If their onboarding has started, they must create their own '
+                  'password the next time they sign in. It is also included if the welcome email is resent.',
+                  style: TextStyle(fontSize: 12, color: SelmsColors.textMuted, height: 1.4),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  await Clipboard.setData(ClipboardData(text: temporaryPassword));
+                  if (ctx.mounted) Navigator.of(ctx).pop();
+                },
+                child: const Text('Copy & close'),
+              ),
+            ],
+          ),
+        );
+        if (!mounted) return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(photoError == null
+            ? 'Changes saved.'
+            : 'Changes saved, but the photo could not be uploaded: $photoError'),
+      ));
       Navigator.of(context).pop(true);
     } catch (e) {
       setState(() => _saveError = e.toString());
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// Called by the photo field: new bytes = a freshly picked photo; null =
+  /// the Remove button. Removing a photo that's already saved deletes it on
+  /// the server straight away (after confirming) so it's gone everywhere.
+  Future<void> _onPhotoChanged(Uint8List? bytes) async {
+    if (bytes != null) {
+      setState(() => _profilePhotoBytes = bytes);
+      return;
+    }
+    // Discarding a photo that was picked but not saved yet.
+    if (_profilePhotoBytes != null) {
+      setState(() => _profilePhotoBytes = null);
+      return;
+    }
+    if (_existingProfileImageUrl == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove profile photo?', style: TextStyle(fontSize: 16)),
+        content: const Text(
+            'The photo is deleted and will disappear everywhere in SELMS. Their initials are shown instead.',
+            style: TextStyle(fontSize: 13)),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Keep')),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: ElevatedButton.styleFrom(backgroundColor: SelmsColors.rose, foregroundColor: Colors.white),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await _api.removeEmployeePhoto(widget.employeeId);
+      if (!mounted) return;
+      setState(() => _existingProfileImageUrl = null);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Photo removed.')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.toString()), backgroundColor: SelmsColors.rose));
     }
   }
 
@@ -251,7 +375,7 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
                         ? '${widget.apiBaseUrl}$_existingProfileImageUrl'
                         : null,
                     fallbackInitials: _initials,
-                    onChanged: (bytes) => setState(() => _profilePhotoBytes = bytes),
+                    onChanged: _onPhotoChanged,
                   ),
                   const SizedBox(height: 20),
                   _grid([
@@ -370,7 +494,7 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
                                 deleteIcon: const Icon(Icons.close, size: 14, color: Colors.white70),
                                 onDeleted: () => setState(() => _equipment.remove(item)),
                               )),
-                          for (final item in const ['Laptop', 'Phone', 'Monitor', 'Access card'])
+                          for (final item in _equipmentOptions)
                             if (!_equipment.contains(item))
                               ActionChip(
                                 label: Text('+ $item', style: const TextStyle(fontSize: 12)),
@@ -394,40 +518,32 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text('Password',
-                                style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w500,
-                                    color: SelmsColors.textSecondary)),
-                            const SizedBox(height: 6),
+                            LabeledField(
+                              label: 'Password',
+                              controller: _passwordCtrl,
+                              hint: 'Type a new password',
+                            ),
+                            const SizedBox(height: 4),
                             Row(
                               children: [
                                 Expanded(
-                                  child: Container(
-                                    height: 40,
-                                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                                    decoration: BoxDecoration(
-                                      color: SelmsColors.fieldBg,
-                                      border: Border.all(color: SelmsColors.border),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    alignment: Alignment.centerLeft,
-                                    child: const Text('••••••••',
-                                        style: TextStyle(fontSize: 12.5, color: SelmsColors.textMuted)),
+                                  child: Text(
+                                    switch (_passwordState) {
+                                      'temporary' => 'Temporary password, included in the welcome email. Edit it if you need to.',
+                                      'own' => 'They created their own password, so it can\'t be shown. Type one to replace it.',
+                                      _ => 'No password is stored to show. Type one to set a new password.',
+                                    },
+                                    style: const TextStyle(fontSize: 10.5, color: SelmsColors.textMuted),
                                   ),
                                 ),
-                                const SizedBox(width: 8),
-                                OutlinedButton(
-                                  onPressed: () => setState(() => _resetPassword = !_resetPassword),
-                                  style: OutlinedButton.styleFrom(
-                                    side: BorderSide(
-                                        color: _resetPassword ? SelmsColors.ink : SelmsColors.border),
-                                    backgroundColor:
-                                        _resetPassword ? SelmsColors.accentBg : Colors.white,
-                                    foregroundColor: SelmsColors.ink,
+                                InkWell(
+                                  onTap: () => setState(() => _passwordCtrl.text = _randomPassword()),
+                                  child: const Padding(
+                                    padding: EdgeInsets.only(left: 8),
+                                    child: Text('Generate',
+                                        style: TextStyle(
+                                            fontSize: 11, fontWeight: FontWeight.w600, color: SelmsColors.ink)),
                                   ),
-                                  child: Text(_resetPassword ? 'Will reset' : 'Reset',
-                                      style: const TextStyle(fontSize: 12)),
                                 ),
                               ],
                             ),

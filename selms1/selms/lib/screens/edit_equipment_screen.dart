@@ -42,6 +42,7 @@ class _EditEquipmentScreenState extends State<EditEquipmentScreen> {
   DateTime? _warrantyExpiry;
   Uint8List? _newPhotoBytes;
   String? _existingPhotoUrl;
+  bool _removeExistingPhoto = false;
 
   final Map<String, IconData> _typeIcons = {
     'Laptop': Icons.laptop_mac_outlined,
@@ -185,12 +186,21 @@ class _EditEquipmentScreenState extends State<EditEquipmentScreen> {
         'notes': _notes.text.trim(),
       });
 
-      if (_newPhotoBytes != null) {
-        try {
+      // The details above are already saved; a photo failure keeps the
+      // screen open with the reason instead of silently dropping it.
+      try {
+        if (_newPhotoBytes != null) {
           await _api.uploadEquipmentPhoto(widget.equipmentId, _newPhotoBytes!);
-        } catch (_) {
-          // Best-effort — a failed photo upload shouldn't undo the rest of the save.
+        } else if (_removeExistingPhoto) {
+          await _api.removeEquipmentPhoto(widget.equipmentId);
         }
+      } catch (e) {
+        if (!mounted) return;
+        setState(() {
+          _saving = false;
+          _error = 'Details saved, but the photo could not be updated: $e';
+        });
+        return;
       }
 
       if (!mounted) return;
@@ -231,7 +241,14 @@ class _EditEquipmentScreenState extends State<EditEquipmentScreen> {
                           imageBytes: _newPhotoBytes,
                           existingImageUrl: _existingPhotoUrl,
                           icon: _typeIcons[_selectedType] ?? Icons.inventory_2_outlined,
-                          onChanged: (bytes) => setState(() => _newPhotoBytes = bytes),
+                          onChanged: (bytes) => setState(() {
+                            _newPhotoBytes = bytes;
+                            // Remove (null) also drops the saved photo on Save.
+                            if (bytes == null) {
+                              _existingPhotoUrl = null;
+                              _removeExistingPhoto = true;
+                            }
+                          }),
                         ),
 
                         _sectionHeader('Identification', 'What this item is and how to find it later.'),

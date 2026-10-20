@@ -12,7 +12,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../models/equipment.dart';
 import '../services/api_client.dart';
 import '../theme/selms_colors.dart';
-import '../widgets/app_shell.dart' show TopBarActions;
+import '../widgets/app_shell.dart' show AppShell, SelmsRoute, TopBarActions;
+import '../widgets/employee_avatar.dart';
 import '../widgets/it_app_shell.dart';
 import 'add_equipment_screen.dart';
 import 'assign_employee_screen.dart';
@@ -22,10 +23,16 @@ const _equipmentStatuses = ['available', 'assigned', 'returned', 'under_repair',
 const _equipmentConditions = ['New', 'Good', 'Damaged'];
 
 class ItProductsScreen extends StatefulWidget {
-  const ItProductsScreen({super.key, required this.apiBaseUrl, required this.itToken});
+  const ItProductsScreen({super.key, required this.apiBaseUrl, required this.itToken, this.viewOnly = false});
 
   final String apiBaseUrl;
+
+  /// The signed-in user's token - IT's, or HR's when [viewOnly] is true.
   final String itToken;
+
+  /// HR's view of the same list: inside HR's shell, search and filters only -
+  /// no adding, assigning or exporting, and items open a read-only summary.
+  final bool viewOnly;
 
   @override
   State<ItProductsScreen> createState() => _ItProductsScreenState();
@@ -305,13 +312,26 @@ class _ItProductsScreenState extends State<ItProductsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final selectedItems = _items.where((e) => _selectedIds.contains(e.id)).toList();
-
+    final content = _buildContent();
+    if (widget.viewOnly) {
+      return AppShell(
+        apiBaseUrl: widget.apiBaseUrl,
+        hrToken: widget.itToken,
+        activeRoute: SelmsRoute.products,
+        child: content,
+      );
+    }
     return ItAppShell(
       apiBaseUrl: widget.apiBaseUrl,
       itToken: widget.itToken,
       activeRoute: ItRoute.products,
-      child: Padding(
+      child: content,
+    );
+  }
+
+  Widget _buildContent() {
+    final selectedItems = _items.where((e) => _selectedIds.contains(e.id)).toList();
+    return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -324,7 +344,7 @@ class _ItProductsScreenState extends State<ItProductsScreen> {
                     children: [
                       const Text('Products',
                           style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: SelmsColors.textPrimary)),
-                      Text('${_items.length} equipment items',
+                      Text('${_items.length} equipment items${widget.viewOnly ? ' · view only' : ''}',
                           style: const TextStyle(fontSize: 12, color: SelmsColors.textMuted)),
                     ],
                   ),
@@ -414,6 +434,7 @@ class _ItProductsScreenState extends State<ItProductsScreen> {
                     foregroundColor: Colors.white,
                   ),
                 ),
+                if (!widget.viewOnly) ...[
                 const SizedBox(width: 10),
                 ElevatedButton.icon(
                   onPressed: () {
@@ -431,10 +452,12 @@ class _ItProductsScreenState extends State<ItProductsScreen> {
                     elevation: 0,
                   ),
                 ),
+                ],
               ],
             ),
             const SizedBox(height: 16),
             Expanded(child: _buildBody()),
+            if (!widget.viewOnly) ...[
             const SizedBox(height: 14),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
@@ -465,9 +488,9 @@ class _ItProductsScreenState extends State<ItProductsScreen> {
                 ),
               ],
             ),
+            ],
           ],
         ),
-      ),
     );
   }
 
@@ -532,6 +555,7 @@ class _ItProductsScreenState extends State<ItProductsScreen> {
                                     apiBaseUrl: widget.apiBaseUrl,
                                     itToken: widget.itToken,
                                     equipmentId: e.id,
+                                    viewOnly: widget.viewOnly,
                                   ),
                                 ))
                                 .then((_) => _load());
@@ -555,7 +579,12 @@ class _ItProductsScreenState extends State<ItProductsScreen> {
                                         ),
                                         alignment: Alignment.center,
                                         child: (e.photoUrl != null && e.photoUrl!.isNotEmpty)
-                                            ? Image.network('${widget.apiBaseUrl}${e.photoUrl}', fit: BoxFit.cover, width: 32, height: 32)
+                                            ? Image.network('${widget.apiBaseUrl}${e.photoUrl}',
+                                                fit: BoxFit.cover,
+                                                width: 32,
+                                                height: 32,
+                                                errorBuilder: (_, _, _) => const Icon(Icons.inventory_2_outlined,
+                                                    size: 14, color: SelmsColors.textMuted))
                                             : const Icon(Icons.inventory_2_outlined, size: 14, color: SelmsColors.textMuted),
                                       ),
                                       const SizedBox(width: 10),
@@ -588,19 +617,11 @@ class _ItProductsScreenState extends State<ItProductsScreen> {
                                       ? const SizedBox()
                                       : Row(
                                           children: [
-                                            Container(
-                                              width: 24,
-                                              height: 24,
-                                              clipBehavior: Clip.hardEdge,
-                                              decoration: const BoxDecoration(color: SelmsColors.accentBg, shape: BoxShape.circle),
-                                              alignment: Alignment.center,
-                                              child: (e.assignedToEmployeePhotoUrl != null && e.assignedToEmployeePhotoUrl!.isNotEmpty)
-                                                  ? Image.network('${widget.apiBaseUrl}${e.assignedToEmployeePhotoUrl}',
-                                                      fit: BoxFit.cover, width: 24, height: 24)
-                                                  : Text(
-                                                      e.assignedToEmployeeName!.substring(0, 1).toUpperCase(),
-                                                      style: const TextStyle(fontSize: 9.5, fontWeight: FontWeight.w600, color: SelmsColors.ink),
-                                                    ),
+                                            EmployeeAvatar(
+                                              apiBaseUrl: widget.apiBaseUrl,
+                                              name: e.assignedToEmployeeName!,
+                                              photoUrl: e.assignedToEmployeePhotoUrl,
+                                              size: 24,
                                             ),
                                             const SizedBox(width: 8),
                                             Expanded(

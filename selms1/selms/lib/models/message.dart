@@ -58,10 +58,12 @@ class MessageConversation {
     required this.lastMessageAt,
     required this.lastSenderRole,
     required this.unreadCount,
+    this.profileImageUrl,
   });
 
   final String employeeId;
   final String employeeName;
+  final String? profileImageUrl;
   final String lastMessage;
   final String lastMessageAt;
   final String lastSenderRole;
@@ -74,5 +76,6 @@ class MessageConversation {
         lastMessageAt: j['last_message_at'] as String,
         lastSenderRole: j['last_sender_role'] as String,
         unreadCount: j['unread_count'] as int? ?? 0,
+        profileImageUrl: j['profile_image_url'] as String?,
       );
 }

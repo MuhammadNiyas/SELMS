@@ -7,6 +7,7 @@
 
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import '../services/api_client.dart';
 import '../theme/selms_colors.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/form_fields.dart';
@@ -16,8 +17,7 @@ const _genders = ['Male', 'Female'];
 const _maritalStatuses = ['Single', 'Married', 'Divorced', 'Widowed'];
 const _departments = ['HR', 'IT', 'Marketing', 'Finance', 'Operations'];
 const _employmentStatuses = ['Probation', 'Confirmed', 'Contract', 'Full-Time', 'Part-Time'];
-const _workLocationTypes = ['Onsite', 'Remote', 'Hybrid'];
-const _equipmentOptions = ['Laptop', 'Phone', 'Monitor', 'Access card'];
+const _workLocationTypes = ['Onsite', 'Remote'];
 
 class AddEmployeeScreen extends StatefulWidget {
   const AddEmployeeScreen({super.key, required this.apiBaseUrl, required this.hrToken});
@@ -60,6 +60,9 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
   String? _workLocationType;
   final _baseSalary = TextEditingController();
   final Set<String> _equipment = {};
+  // The equipment types IT has actually created - one choice per type.
+  List<String> _equipmentOptions = [];
+  bool _equipmentOptionsLoaded = false;
   final _remarks = TextEditingController();
 
   // Account
@@ -67,6 +70,26 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
   final _tempPassword = TextEditingController();
 
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadEquipmentOptions();
+  }
+
+  Future<void> _loadEquipmentOptions() async {
+    try {
+      final api = ApiClient(baseUrl: widget.apiBaseUrl, hrToken: widget.hrToken);
+      final types = await api.listEquipmentTypes(onlyExisting: true);
+      if (!mounted) return;
+      setState(() {
+        _equipmentOptions = types;
+        _equipmentOptionsLoaded = true;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _equipmentOptionsLoaded = true);
+    }
+  }
 
   @override
   void dispose() {
@@ -124,7 +147,7 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
     if (_employmentStatus == null || _workLocationType == null) {
       return 'Please fill in every field before continuing.';
     }
-    if (_equipment.isEmpty) {
+    if (_equipmentOptions.isNotEmpty && _equipment.isEmpty) {
       return 'Please fill in every field before continuing.';
     }
     if (num.tryParse(_baseSalary.text.replaceAll(',', '').trim()) == null) {
@@ -448,6 +471,9 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
         const Text('Equipment needed',
             style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: SelmsColors.textSecondary)),
         const SizedBox(height: 8),
+        if (_equipmentOptionsLoaded && _equipmentOptions.isEmpty)
+          const Text('No equipment has been added by IT yet, so there is nothing to choose.',
+              style: TextStyle(fontSize: 12, color: SelmsColors.textMuted)),
         Wrap(
           spacing: 8,
           runSpacing: 8,
