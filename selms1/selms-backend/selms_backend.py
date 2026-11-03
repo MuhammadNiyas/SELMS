@@ -229,16 +229,17 @@ def _booking_summary(booking):
     }
 
 
-def _orientation_email_block(booking) -> str:
-    """The 'your orientation' box appended to the welcome email. Built from
-    the real booking (not written by the AI), so the time and link are
-    always the ones actually in the schedule."""
+def _orientation_email_block(booking, title="Your orientation") -> str:
+    """The 'your orientation' box appended to the welcome email (and, titled
+    'Your exit interview', to the offboarding email). Built from the real
+    booking (not written by the AI), so the time and link are always the
+    ones actually in the schedule."""
     info = _booking_summary(booking)
     if not info:
         return ""
     when = f"{info['date']} at {info['start_time']}"
     mode_label = {"in_person": "In person", "online": "Online"}.get(info["mode"], "In person")
-    lines = [f"<strong>Your orientation:</strong> {when} ({mode_label})"]
+    lines = [f"<strong>{title}:</strong> {when} ({mode_label})"]
     if info["location"]:
         lines.append(f"Location: {info['location']}")
     join = ""
@@ -603,7 +604,18 @@ def get_equipment(equipment_id):
     if not doc:
         return jsonify({"message": "Equipment not found."}), 404
     doc["_id"] = str(doc["_id"])
-    return jsonify(doc), 200
+    return jsonify(_with_assignee_photo(doc)), 200
+
+
+def _with_assignee_photo(doc):
+    """The assigned employee's CURRENT photo (the copy stored at assign time
+    goes stale, or is empty if they had none yet)."""
+    eid = doc.get("assigned_to_employee_id")
+    if eid:
+        person = users.find_one({"employee_id": eid}, {"profile_image_url": 1}) or {}
+        doc["assigned_to_employee_photo_url"] = person.get("profile_image_url") or doc.get(
+            "assigned_to_employee_photo_url")
+    return doc
 
 
 @app.put("/api/equipment/<equipment_id>")
@@ -680,6 +692,14 @@ def assign_equipment():
     )
     _notify("employee", employee_id, "notification", "Equipment assigned",
             f"IT has assigned {result.modified_count} item(s) to you.", {"type": "onboarding"})
+    fresh = users.find_one({"employee_id": employee_id}) or employee
+    if (fresh.get("onboarding_status") or {}).get("started") and fresh.get("equipment_needed"):
+        items, _extra, ready, _at = _equipment_fulfilment(fresh)
+        if ready:
+            _notify("hr", None, "notification", f"Equipment ready: {fresh.get('full_name')}",
+                    "IT has assigned everything requested: " + ", ".join(
+                        f"{(i['asset'] or {}).get('name') or i['type']}" for i in items) + ".",
+                    {"type": "products"}, dedupe_key=f"equipment-ready:{employee_id}")
     _advance_safely(employee_id)
     return jsonify({"message": f"Assigned {result.modified_count} item(s) to {employee.get('full_name')}."}), 200
 
@@ -726,6 +746,11 @@ def return_equipment(equipment_id):
     if leaver and (leaver.get("offboarding_status") or {}).get("started"):
         tag = doc.get("asset_tag") or ""
         what = f"{doc.get('name') or doc.get('type') or 'Item'}{f' ({tag})' if tag else ''}"
+        if condition_on_return in ("Lost", "Damaged"):
+            _notify("hr", None, "notification",
+                    f"Equipment {'lost' if condition_on_return == 'Lost' else 'returned damaged'}: {leaver.get('full_name')}",
+                    f"{what} was recorded as {'lost' if condition_on_return == 'Lost' else 'damaged (sent for repair)'} by IT.",
+                    {"type": "products"})
         if condition_on_return == "Lost":
             title, text = "Equipment recorded as lost", f"IT has recorded {what} as lost. It no longer counts as with you."
         elif condition_on_return == "Damaged":
@@ -733,6 +758,16 @@ def return_equipment(equipment_id):
         else:
             title, text = "Equipment received", f"{what} was received by IT. Thank you!"
         _notify("employee", returned_from, "notification", title, text, {"type": "offboarding"})
+    # Everything back from a remote leaver: their return parcel has clearly
+    # arrived, so it's closed off as delivered without another click.
+    if leaver and not _equipment_outstanding(returned_from):
+        parcel = _return_parcel(leaver)
+        if parcel and parcel.get("status") != "delivered":
+            shipments.update_one({"_id": parcel["_id"]}, {"$set": {
+                "status": "delivered", "delivered_at": datetime.now(timezone.utc).isoformat()}})
+            _notify("hr", None, "notification", f"Return parcel received: {leaver.get('full_name')}",
+                    "IT has received everything they posted back.", {"type": "shipments"},
+                    dedupe_key=f"hr-shipment:{parcel['_id']}:delivered")
     # If this person is being offboarded, the "Retrieve IT equipment" step may
     # now be complete - let the flow move on to what comes next.
     _advance_offboarding_safely(returned_from)
@@ -858,7 +893,7 @@ def list_equipment():
     items = []
     for doc in equipment.find(query).sort("created_at", -1):
         doc["_id"] = str(doc["_id"])
-        items.append(doc)
+        items.append(_with_assignee_photo(doc))
     return jsonify({"items": items}), 200
 
 
@@ -1395,6 +1430,14 @@ def _compute_it_equipment_ready(employee_doc):
     return ready, ready_at
 
 
+def _asset_card(e):
+    """What IT's request cards show for one piece of equipment: its photo
+    and how to find it (asset tag / serial number, the equipment id)."""
+    return {"equipment_id": str(e["_id"]), "name": e.get("name"), "type": e.get("type"),
+            "asset_tag": e.get("asset_tag") or "", "serial_number": e.get("serial_number") or "",
+            "photo_url": e.get("photo_url")}
+
+
 def _equipment_fulfilment(employee_doc):
     """Matches what the employee was approved for against what IT has
     actually assigned to them, item by item (by equipment type). This is
@@ -1415,10 +1458,9 @@ def _equipment_fulfilment(employee_doc):
         items.append({
             "type": need,
             "assigned": match is not None,
-            "asset": ({"name": match.get("name"), "asset_tag": match.get("asset_tag") or "",
-                       "assigned_date": match.get("assigned_date")} if match else None),
+            "asset": ({**_asset_card(match), "assigned_date": match.get("assigned_date")} if match else None),
         })
-    extra = [{"name": a.get("name"), "type": a.get("type"), "asset_tag": a.get("asset_tag") or ""} for a in pool]
+    extra = [_asset_card(a) for a in pool]
     ready = all(i["assigned"] for i in items)
     ready_at = max((a["assigned_date"] for a in assigned if a.get("assigned_date")), default=None) \
         if ready and assigned else None
@@ -1575,9 +1617,9 @@ def _flow_step_hint(emp, node):
         items, _extra, _ready, _at = _equipment_fulfilment(emp)
         done = sum(1 for i in items if i["assigned"])
         told = (emp.get("onboarding_status") or {}).get("it_notified")
-        return ((("IT has been told. " + _it_accept_text(emp["employee_id"], "equipment_request")) if told
-                 else "SELMS will tell IT. ")
-                + f"Waiting for IT to assign the equipment ({done} of {len(items)}).")
+        if not told:
+            return f"SELMS will tell IT. Waiting for IT to assign the equipment ({done} of {len(items)})."
+        return "IT has been told. " + (_it_progress_text(emp, "equipment_request") or "IT has done everything.")
     if label == "Arrange courier":
         return "Waiting for IT to create the Pos shipment."
     if label == "Schedule orientation":
@@ -1646,10 +1688,15 @@ def _aimed_note(not_before, slot):
 
 
 def _tell_hr_if_moved(emp, what, note, slot):
+    """HR's Smart Schedule notice for an automatic booking: where it landed,
+    and why if it isn't the time the step aimed for."""
+    when = _clock_text(slot["date"], slot["start_time"])
     if note:
         _notify("hr", None, "notification", f"{what} moved: {emp.get('full_name')}",
-                f"{note}, so it's booked for {_clock_text(slot['date'], slot['start_time'])}.",
-                {"type": "lifecycle"})
+                f"{note}, so it's booked for {when}.", {"type": "schedule"})
+    else:
+        _notify("hr", None, "notification", f"{what} booked: {emp.get('full_name')}",
+                f"Booked for {when}.", {"type": "schedule"})
 
 
 def _default_meeting_mode(emp):
@@ -2529,6 +2576,8 @@ def _return_items(emp):
         it["outcome"] = ({"lost": "lost", "under_repair": "damaged"}.get(doc.get("status"), "returned")
                          if it["returned"] else None)
         it["photo_url"] = doc.get("photo_url")
+        it["serial_number"] = doc.get("serial_number") or ""
+        it["asset_tag"] = it.get("asset_tag") or doc.get("asset_tag") or ""
         it["prep"] = prep.get(it["equipment_id"])
     return items
 
@@ -2552,11 +2601,89 @@ def _returns_payload(emp):
     parcel = _return_parcel(emp)
     return {"started": True, "last_working_day": st.get("last_working_day"), "location": EQUIPMENT_RETURN_LOCATION,
             "ready_at": st.get("ready_to_return_at"), "items": _return_items(emp),
+            # Nothing on record: done only once IT confirms there is nothing to collect.
+            "nothing_to_collect_at": (_return_request(emp["employee_id"]) or {}).get("nothing_to_collect_at"),
             # Remote leavers post their equipment back with Pos Malaysia instead.
             "by_post": emp.get("work_location_type") in SHIPPING_WORK_LOCATIONS,
             "posted_at": st.get("posted_at"),
             "shipment": ({"status": parcel.get("status"), "pos_reference": parcel.get("pos_reference") or "",
-                          "tracking_url": POS_TRACKING_URL} if parcel else None)}
+                          "tracking_url": POS_TRACKING_URL} if parcel else None),
+            "qr_image_url": (parcel or {}).get("qr_image_url") or st.get("return_qr_url"),
+            # IT cancelled the last parcel ({reason, at}) - the employee sends it again.
+            "rejected": st.get("return_rejected"),
+            # Remote leavers book the Pos parcel themselves: where it goes, the
+            # Pos website, and their own details as the sender.
+            "company": {"name": COMPANY_NAME, "address": COMPANY_ADDRESS, "phone": COMPANY_PHONE},
+            "pos_url": POS_ECONNOTE_URL,
+            "sender": {"name": emp.get("full_name") or "", "phone": emp.get("mobile_number") or "",
+                       "address": ", ".join(x for x in (emp.get("address_line"), emp.get("postcode"),
+                                                        emp.get("state")) if x)}}
+
+
+# ---------- What IT still has to do, worked out from the records ----------
+#
+# IT never ticks a request off by hand. Each card's tasks are read live from
+# the equipment and shipment records, so a request is done the moment the
+# work really is: everything assigned (and, for remote hires, the parcel
+# posted), or everything back from a leaver.
+
+def _outgoing_parcel(employee_id):
+    return shipments.find_one({"employee_id": employee_id, "direction": "to_employee",
+                               "status": {"$ne": "cancelled"}}, sort=[("created_at", -1)])
+
+
+def _it_onboarding_tasks(emp):
+    """([{id, label, detail, done}], all_done) for a new hire's request."""
+    items, _extra, ready, _at = _equipment_fulfilment(emp)
+    got = sum(1 for i in items if i["assigned"])
+    tasks = [{"id": "assign", "label": "Assign the equipment", "done": ready,
+              "detail": f"{got} of {len(items)} assigned" if items else "Nothing was requested"}]
+    if emp.get("work_location_type") in SHIPPING_WORK_LOCATIONS:
+        parcel = _outgoing_parcel(emp["employee_id"]) or {}
+        st, ref = parcel.get("status"), parcel.get("pos_reference") or ""
+        tasks.append({"id": "parcel", "label": "Create the Pos Malaysia parcel",
+                      "done": st in ("order_created", "dropped_off", "delivered"),
+                      "detail": f"Reference {ref}" if ref else "Not created yet"})
+        tasks.append({"id": "posted", "label": "Post the parcel", "done": st in ("dropped_off", "delivered"),
+                      "detail": {"dropped_off": "Dropped off at Pos", "delivered": "Delivered"}.get(st, "Not posted yet")})
+    return tasks, all(t["done"] for t in tasks)
+
+
+def _it_return_tasks(emp, req, items=None):
+    """([{id, label, detail, done}], all_done) for a leaver's equipment return."""
+    items = _return_items(emp) if items is None else items
+    st = emp.get("offboarding_status") or {}
+    back = sum(1 for i in items if i["returned"])
+    all_back = bool(items) and back == len(items)
+    tasks = []
+    if not items:
+        tasks.append({"id": "confirm", "label": "Confirm there is nothing to collect",
+                      "done": bool((req or {}).get("nothing_to_collect_at")),
+                      "detail": "No equipment is on record for this person"})
+    else:
+        ready = st.get("ready_to_return_at")
+        tasks.append({"id": "ready", "label": "Employee completes their return checklist",
+                      "done": bool(ready) or all_back,
+                      "detail": f"Ready since {str(ready)[:10]}" if ready else "Waiting for the employee"})
+        if emp.get("work_location_type") in SHIPPING_WORK_LOCATIONS:
+            parcel = _return_parcel(emp) or {}
+            ref = parcel.get("pos_reference") or ""
+            tasks.append({"id": "posted", "label": "Employee posts the parcel with Pos Malaysia",
+                          "done": parcel.get("status") in ("dropped_off", "delivered") or all_back,
+                          "detail": f"Tracking {ref} - check it on Pos tracking" if ref else "No tracking number yet"})
+        tasks.append({"id": "receive", "label": "Receive each item (Products / Scan)", "done": all_back,
+                      "detail": f"{back} of {len(items)} received"})
+    return tasks, _equipment_return_done(emp["employee_id"])
+
+
+def _it_progress_text(emp, kind):
+    """For HR's flow-step hint: what IT has done so far, read from the records."""
+    if kind == "equipment_request":
+        tasks, _done = _it_onboarding_tasks(emp)
+    else:
+        tasks, _done = _it_return_tasks(emp, _return_request(emp["employee_id"]))
+    left = [f"{t['label'].lower()} ({t['detail']})" for t in tasks if not t["done"]]
+    return ("Still to do: " + "; ".join(left) + ". ") if left else ""
 
 
 @app.get("/api/employee/me/returns")
@@ -2623,27 +2750,87 @@ def employee_ready_to_return():
 @app.post("/api/employee/me/returns/posted")
 @require_employee
 def employee_posted_return():
-    """Remote leaver: "I've posted it" - the parcel IT set up is now with
-    Pos Malaysia. Marks it dropped off and tells IT."""
+    """Remote leaver: they booked the parcel on Pos Malaysia's site themselves
+    (to the company address) and posted it. Saves their tracking number on
+    the return shipment - creating it if IT hadn't - marks it dropped off and
+    sends it to IT to review."""
     emp = g.current_employee
     if not (emp.get("offboarding_status") or {}).get("started"):
         return jsonify({"message": "Offboarding hasn't started."}), 400
     if emp.get("work_location_type") not in SHIPPING_WORK_LOCATIONS:
         return jsonify({"message": "Only remote employees return equipment by post."}), 400
+    tracking = ((request.get_json(silent=True) or {}).get("tracking_number") or "").strip()[:60]
     parcel = _return_parcel(emp)
-    if not parcel:
-        return jsonify({"message": "IT hasn't sent you the Pos Malaysia return details yet."}), 400
+    if not tracking and not (parcel or {}).get("pos_reference"):
+        return jsonify({"message": "Enter the tracking number Pos Malaysia gave you."}), 400
+    outstanding = [i for i in _return_items(emp) if not i["returned"]]
+    unfinished = [i.get("name") or i.get("type") or "item" for i in outstanding if not _prep_complete(i["prep"])]
+    if unfinished:
+        return jsonify({"message": "Finish the checklist first for: " + ", ".join(unfinished) + "."}), 400
+
     now = datetime.now(timezone.utc).isoformat()
-    users.update_one({"employee_id": emp["employee_id"]}, {"$set": {"offboarding_status.posted_at": now}})
-    updates = {"employee_posted_at": now}
-    if parcel.get("status") in ("pending", "order_created"):
-        updates.update({"status": "dropped_off", "dropped_off_at": now})
-    shipments.update_one({"_id": parcel["_id"]}, {"$set": updates})
-    ref = parcel.get("pos_reference") or ""
-    _notify("it", None, "notification", f"{emp['full_name']} has posted their equipment",
-            f"Return parcel{f' {ref}' if ref else ''} is on its way with Pos Malaysia.", {"type": "requests"})
+    st = emp.get("offboarding_status") or {}
+    users.update_one({"employee_id": emp["employee_id"]}, {
+        "$set": {"offboarding_status.posted_at": now,
+                 "offboarding_status.ready_to_return_at": st.get("ready_to_return_at") or now},
+        "$unset": {"offboarding_status.return_rejected": ""}})
+    if parcel is None:
+        result = shipments.insert_one({
+            "employee_id": emp["employee_id"], "employee_name": emp["full_name"], "direction": "return",
+            "status": "dropped_off", "dropped_off_at": now, "items": _shipment_items(emp, "return"),
+            "pos_reference": tracking, "qr_image_url": st.get("return_qr_url"), "notes": "",
+            "created_by": emp.get("work_email") or emp.get("personal_email") or "employee", "created_at": now,
+            "submitted_by_employee": True, "employee_posted_at": now,
+        })
+        parcel = shipments.find_one({"_id": result.inserted_id})
+    else:
+        updates = {"employee_posted_at": now, "submitted_by_employee": True}
+        if tracking:
+            updates["pos_reference"] = tracking
+        if st.get("return_qr_url"):
+            updates["qr_image_url"] = st["return_qr_url"]
+        if parcel.get("status") in ("pending", "order_created"):
+            updates.update({"status": "dropped_off", "dropped_off_at": now})
+        shipments.update_one({"_id": parcel["_id"]}, {"$set": updates})
+    ref = tracking or parcel.get("pos_reference") or ""
+    _notify("hr", None, "notification", f"Return parcel posted: {emp['full_name']}",
+            f"They sent their equipment back by Pos Malaysia - tracking {tracking or parcel.get('pos_reference') or ''}.",
+            {"type": "shipments"})
+    _notify("it", None, "notification", f"Review return parcel: {emp['full_name']}",
+            f"{emp['full_name']} posted their equipment with Pos Malaysia - tracking {ref}. "
+            "Check it in Shipments (Returns) and receive each item when it arrives.", {"type": "shipments", "direction": "return"})
     fresh = users.find_one({"employee_id": emp["employee_id"]})
-    return jsonify({"message": "IT has been told your parcel is on its way.", **_returns_payload(fresh)}), 200
+    return jsonify({"message": "Sent to IT - they'll check your parcel and tick each item off when it arrives.",
+                    **_returns_payload(fresh)}), 200
+
+
+@app.post("/api/employee/me/returns/qr")
+@require_employee
+def employee_upload_return_qr():
+    """Remote leaver: the screenshot of the QR code Pos Malaysia gave them for
+    the return parcel. Kept on their offboarding record and on the return
+    shipment (once there is one), where IT sees it."""
+    emp = g.current_employee
+    if not (emp.get("offboarding_status") or {}).get("started"):
+        return jsonify({"message": "Offboarding hasn't started."}), 400
+    if emp.get("work_location_type") not in SHIPPING_WORK_LOCATIONS:
+        return jsonify({"message": "Only remote employees return equipment by post."}), 400
+    file = request.files.get("qr")
+    if file is None or file.filename == "":
+        return jsonify({"message": "No image was sent."}), 400
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in ALLOWED_PHOTO_EXTENSIONS:
+        return jsonify({"message": "The QR image must be a JPG or PNG file."}), 400
+    # A new name each time, so a replaced screenshot never shows the cached old one.
+    filename = secure_filename(f"return-qr-{emp['employee_id']}-{int(datetime.now().timestamp())}.{ext}")
+    file.save(os.path.join(UPLOAD_FOLDER, filename))
+    url = f"/uploads/{filename}"
+    users.update_one({"employee_id": emp["employee_id"]}, {"$set": {"offboarding_status.return_qr_url": url}})
+    parcel = _return_parcel(emp)
+    if parcel:
+        shipments.update_one({"_id": parcel["_id"]}, {"$set": {"qr_image_url": url}})
+    fresh = users.find_one({"employee_id": emp["employee_id"]})
+    return jsonify({"message": "QR code uploaded.", **_returns_payload(fresh)}), 200
 
 
 def _equipment_return_reminders():
@@ -3019,6 +3206,32 @@ def it_accept_message(message_id):
     return jsonify(_serialize_message(doc)), 200
 
 
+@app.post("/api/it/returns/<message_id>/nothing-to-collect")
+@require_it
+def it_confirm_nothing_to_collect(message_id):
+    """IT confirming a leaver with no equipment on record really has nothing
+    to hand back - the only way such a return counts as done."""
+    try:
+        doc = messages.find_one({"_id": ObjectId(message_id), "kind": "equipment_return_request",
+                                 "request_status": "open"})
+    except Exception:  # noqa: BLE001
+        return jsonify({"message": "Invalid request id."}), 400
+    if not doc:
+        return jsonify({"message": "Return request not found."}), 404
+    if _equipment_outstanding(doc["employee_id"]):
+        return jsonify({"message": "This person still has equipment assigned - retrieve it from Products."}), 400
+    by = g.current_user.get("full_name") or "IT"
+    messages.update_one({"_id": doc["_id"]}, {"$set": {
+        "nothing_to_collect_at": datetime.now(timezone.utc).isoformat(), "nothing_to_collect_by": by,
+        "accepted": True, "accepted_by": doc.get("accepted_by") or by,
+        "accepted_at": doc.get("accepted_at") or datetime.now(timezone.utc).isoformat(),
+    }})
+    _notify("hr", None, "notification", f"No equipment to collect: {doc.get('employee_name') or 'an employee'}",
+            f"{by} confirmed there is no company equipment to collect.", {"type": "lifecycle"})
+    _advance_offboarding_safely(doc["employee_id"])
+    return jsonify({"message": "Confirmed - nothing to collect."}), 200
+
+
 @app.delete("/api/it/messages/<message_id>")
 @require_it
 def it_delete_notice(message_id):
@@ -3056,20 +3269,19 @@ def it_equipment_requests():
         emp = users.find_one({"employee_id": d["employee_id"], "role": "employee"})
         if not emp:
             continue
-        items, extra, fulfilled, fulfilled_at = _equipment_fulfilment(emp)
+        items, extra, _ready, fulfilled_at = _equipment_fulfilment(emp)
+        # Done by itself once IT has really done the work: everything
+        # assigned and, for remote hires, the Pos parcel posted.
+        tasks, fulfilled = _it_onboarding_tasks(emp)
         status = d.get("request_status", "open")
-        parcel = shipments.find_one(
-            {"employee_id": emp["employee_id"], "direction": "to_employee", "status": {"$ne": "cancelled"}},
-            sort=[("created_at", -1)],
-        )
+        parcel = _outgoing_parcel(emp["employee_id"])
         provisioning = d.get("provisioning") or {}
         out.append({
             "message_id": str(d["_id"]),
             "created_at": d["created_at"],
             "status": status,  # open | cancelled
-            "accepted": d.get("accepted", False),
-            "accepted_by": d.get("accepted_by"),
-            "accepted_at": d.get("accepted_at"),
+            "tasks": tasks,
+            "deadline": (emp.get("hire_date") or "")[:10] or None,
             "fulfilled": fulfilled and status == "open",
             "fulfilled_at": fulfilled_at,
             "items": items,
@@ -3117,31 +3329,29 @@ def it_equipment_requests():
         emp = users.find_one({"employee_id": d["employee_id"], "role": "employee"})
         if not emp:
             continue
-        still = list(equipment.find({"assigned_to_employee_id": emp["employee_id"], "status": "assigned"}))
-        still_ids = {str(e["_id"]) for e in still}
-        items, seen = [], set()
-        for it in d.get("return_items") or []:
-            seen.add(it["equipment_id"])
-            items.append({**it, "returned": it["equipment_id"] not in still_ids})
-        for e in still:
-            if str(e["_id"]) not in seen:  # assigned after the request was made
-                items.append({"equipment_id": str(e["_id"]), "name": e.get("name"), "type": e.get("type"),
-                              "asset_tag": e.get("asset_tag") or "", "returned": False})
+        # Same items the employee sees: photo, tag, returned / outcome, their checklist.
+        items = _return_items(emp)
         status_doc = emp.get("offboarding_status") or {}
-        prep = status_doc.get("equipment_prep") or {}
-        for it in items:
-            it["prep"] = prep.get(it["equipment_id"])
+        tasks, fulfilled = _it_return_tasks(emp, d, items)
+        parcel = _return_parcel(emp)
         returns.append({
             "message_id": str(d["_id"]),
             "created_at": d["created_at"],
             "ready_at": status_doc.get("ready_to_return_at"),
             "posted_at": status_doc.get("posted_at"),
             "items": items,
+            "tasks": tasks,
             "returned_count": sum(1 for i in items if i["returned"]),
             "total_count": len(items),
-            "fulfilled": not still,
+            "fulfilled": fulfilled,
+            "nothing_to_collect_at": d.get("nothing_to_collect_at"),
+            "nothing_to_collect_by": d.get("nothing_to_collect_by"),
             "last_working_day": d.get("last_working_day") or status_doc.get("last_working_day"),
             "departure_type": d.get("departure_type") or status_doc.get("departure_type"),
+            "location": EQUIPMENT_RETURN_LOCATION,
+            "by_post": emp.get("work_location_type") in SHIPPING_WORK_LOCATIONS,
+            "shipment": ({"status": parcel.get("status"), "pos_reference": parcel.get("pos_reference") or "",
+                          "from_employee": bool(parcel.get("submitted_by_employee"))} if parcel else None),
             "employee": {
                 "employee_id": emp["employee_id"],
                 "full_name": emp["full_name"],
@@ -3149,6 +3359,8 @@ def it_equipment_requests():
                 "department": emp.get("department"),
                 "work_location_type": emp.get("work_location_type"),
                 "profile_image_url": emp.get("profile_image_url"),
+                "personal_email": emp.get("personal_email"),
+                "mobile_number": emp.get("mobile_number"),
             },
         })
     returns.sort(key=lambda r: r["fulfilled"])  # work to do first
@@ -3550,6 +3762,24 @@ def _equipment_outstanding(employee_id):
     return equipment.count_documents({"assigned_to_employee_id": employee_id, "status": "assigned"})
 
 
+def _return_request(employee_id):
+    return messages.find_one({"employee_id": employee_id, "kind": "equipment_return_request",
+                              "request_status": "open"}, sort=[("created_at", -1)])
+
+
+def _equipment_return_done(employee_id):
+    """Equipment counts as returned only through IT: every item that was with
+    the employee has been received (or recorded lost) in Products / Scan. An
+    empty list never counts on its own - when nothing is on record, IT must
+    confirm there is nothing to collect on the return request."""
+    if _equipment_outstanding(employee_id):
+        return False
+    req = _return_request(employee_id)
+    if not req:
+        return False  # IT hasn't even been told yet
+    return bool(req.get("return_items")) or bool(req.get("nothing_to_collect_at"))
+
+
 def _offboarding_step_done(emp, node):
     if node.get("step") == "email":
         return bool((((emp.get("offboarding_status") or {}).get("email_steps") or {}).get(node.get("id")) or {}).get("done_at"))
@@ -3562,7 +3792,7 @@ def _offboarding_step_done(emp, node):
     if label == "Send offboarding email":
         return bool(status.get("offboarding_email_sent"))
     if label == "Retrieve IT equipment":
-        return _equipment_outstanding(emp["employee_id"]) == 0
+        return _equipment_return_done(emp["employee_id"])
     if label == "Schedule exit interview":
         return bool(status.get("exit_interview_scheduled")) or bool(_exit_interview_booking(emp["employee_id"]))
     if label == END_OFFBOARDING:
@@ -3588,9 +3818,13 @@ def _offboarding_step_hint(emp, node):
     if label == "Retrieve IT equipment":
         left = _equipment_outstanding(emp["employee_id"])
         told = (emp.get("offboarding_status") or {}).get("it_notified")
-        return ((("IT has been told. " + _it_accept_text(emp["employee_id"], "equipment_return_request")) if told
-                 else "SELMS will tell IT. ")
-                + f"Waiting for IT to retrieve the equipment ({left} item(s) still with the employee).")
+        req = _return_request(emp["employee_id"])
+        if told and req and not left and not req.get("return_items"):
+            return ("IT has been told. No equipment is on record for this person - "
+                    "waiting for IT to confirm there is nothing to collect.")
+        if not told:
+            return f"SELMS will tell IT. Waiting for IT to retrieve the equipment ({left} item(s) still with the employee)."
+        return "IT has been told. " + (_it_progress_text(emp, "equipment_return_request") or "Everything is back.")
     if label == "Schedule exit interview":
         return "SELMS books the next free slot before the last working day."
     if label == END_OFFBOARDING:
@@ -3699,10 +3933,18 @@ def _email_booking(booking):
     threading.Thread(target=send_all, daemon=True).start()
 
 
-def _plain_email_html(body_text):
+def _plain_email_html(body_text, extra_html=""):
     import html as _htmlmod
     paragraphs = "".join(f"<p>{_htmlmod.escape(line)}</p>" for line in body_text.split("\n") if line.strip())
-    return f'<div style="font-family:sans-serif;color:#14161b">{paragraphs}</div>'
+    return f'<div style="font-family:sans-serif;color:#14161b">{paragraphs}{extra_html}</div>'
+
+
+def _offboarding_email_html(emp, body_text):
+    """The offboarding email with the 'Your exit interview' box (time, format
+    and, for online, the Google Meet 'Join online' link) - like the
+    orientation box in the welcome email."""
+    return _plain_email_html(body_text, _orientation_email_block(
+        _exit_interview_booking(emp["employee_id"]), "Your exit interview"))
 
 
 def _notify_it_equipment_return(emp):
@@ -3788,6 +4030,7 @@ def _advance_offboarding(employee_id):
     rest of the flow back. Safe to call any time - does nothing if
     offboarding hasn't been started, and steps already done are skipped."""
     summary = {"it_notified": False, "exit_interview": None, "warning": None}
+    email_due = False
     for node in _offboarding_step_nodes(employee_id):
         emp = users.find_one({"employee_id": employee_id, "role": "employee"})
         if not emp or not (emp.get("offboarding_status") or {}).get("started"):
@@ -3806,7 +4049,7 @@ def _advance_offboarding(employee_id):
             st = emp.get("offboarding_status") or {}
             if st.get("email_saved") and st.get("email_subject") and st.get("email_body") \
                     and _step_is_due(emp, node, "offboarding"):
-                _send_offboarding_email(emp, st["email_subject"], st["email_body"], advance=False)
+                email_due = True  # sent after this run - see below
             continue
         if node.get("step") == "email":
             if _step_is_due(emp, node, "offboarding"):
@@ -3826,6 +4069,13 @@ def _advance_offboarding(employee_id):
             if slot is not None:
                 summary["exit_interview"] = slot
         # any other step is done by a person - the flow carries on past it
+    if email_due:
+        # Last, so the email's "Your exit interview" box (time, format and the
+        # Google Meet "Join online" link) shows the session just booked above.
+        emp = users.find_one({"employee_id": employee_id, "role": "employee"})
+        st = (emp or {}).get("offboarding_status") or {}
+        if emp and not st.get("offboarding_email_sent"):
+            _send_offboarding_email(emp, st["email_subject"], st["email_body"], advance=False)
     summary["completed"] = _check_completion(employee_id, "offboarding")
     return summary
 
@@ -3911,7 +4161,7 @@ def offboarding_send_email(employee_id):
 
     to_email = emp.get("personal_email") or emp.get("work_email")
     try:
-        send_email(to_email=to_email, subject=subject, html_body=_plain_email_html(body_text))
+        send_email(to_email=to_email, subject=subject, html_body=_offboarding_email_html(emp, body_text))
     except Exception as exc:
         return jsonify({"message": f"Could not send email: {exc}"}), 502
 
@@ -3962,9 +4212,6 @@ def _offboarding_checklist(employee_doc):
     uses, so the checklist and the flow chart can never disagree."""
     status = employee_doc.get("offboarding_status") or _default_offboarding_status()
     employee_id = employee_doc["employee_id"]
-    equipment_outstanding = equipment.count_documents({
-        "assigned_to_employee_id": employee_id, "status": "assigned",
-    })
     interview = _exit_interview_booking(employee_id)
     items = [
         {"id": "departure_recorded", "label": "Departure Recorded",
@@ -3974,7 +4221,7 @@ def _offboarding_checklist(employee_doc):
          "done_at": status.get("exit_interview_scheduled_at"),
          "meeting": _booking_summary(interview)},
         {"id": "equipment_returned", "label": "Equipment Returned",
-         "done": equipment_outstanding == 0, "done_at": None},
+         "done": _equipment_return_done(employee_id), "done_at": None},
         {"id": "access_revoked", "label": "IT Access Revoked",
          "done": status.get("access_revoked", False), "done_at": status.get("access_revoked_at")},
     ]
@@ -4180,6 +4427,103 @@ def hr_dashboard():
         "upcoming_sessions": upcoming,
         "equipment": eq,
         "equipment_waiting": waiting,
+        "unread_messages": unread,
+    }), 200
+
+
+@app.get("/api/it/dashboard")
+@require_it
+def it_dashboard():
+    """Everything IT's dashboard shows, in one call: equipment in stock and
+    with people, the work queue (new hires to prepare, leavers to collect
+    from - most urgent first, from the same live tasks as the request
+    cards), parcels, the week's sessions, warranties ending soon and unread
+    employee messages."""
+    today = _today_my()
+    statuses = {s: equipment.count_documents({"status": s}) for s in ("available", "assigned", "under_repair", "lost")}
+    total = equipment.count_documents({})
+    holders = len([x for x in equipment.distinct("assigned_to_employee_id", {"status": "assigned"}) if x])
+
+    by_type = {}
+    for e in equipment.find({}, {"type": 1, "status": 1}):
+        t = e.get("type") or "Other"
+        row = by_type.setdefault(t, {"total": 0, "available": 0})
+        row["total"] += 1
+        row["available"] += 1 if e.get("status") == "available" else 0
+
+    queue = []
+    for kind in ("equipment_request", "equipment_return_request"):
+        for req in messages.find({"target_role": "it", "kind": kind, "request_status": "open"}):
+            emp = users.find_one({"employee_id": req["employee_id"], "role": "employee"})
+            if not emp:
+                continue
+            onboarding = kind == "equipment_request"
+            if onboarding:
+                tasks, done = _it_onboarding_tasks(emp)
+                items, _x, _r, _a = _equipment_fulfilment(emp)
+                got, total_items = sum(1 for i in items if i["assigned"]), len(items)
+                deadline = _as_date(emp.get("hire_date"))
+            else:
+                ret_items = _return_items(emp)
+                tasks, done = _it_return_tasks(emp, req, ret_items)
+                got, total_items = sum(1 for i in ret_items if i["returned"]), len(ret_items)
+                deadline = _as_date((emp.get("offboarding_status") or {}).get("last_working_day"))
+            if done:
+                continue
+            days_left = (deadline - today).days if deadline else None
+            nxt = next((t for t in tasks if not t["done"]), None)
+            queue.append({
+                "employee_id": emp["employee_id"], "full_name": emp.get("full_name"),
+                "profile_image_url": emp.get("profile_image_url"), "department": emp.get("department"),
+                "work_location_type": emp.get("work_location_type"),
+                "process": "onboarding" if onboarding else "offboarding",
+                "done_count": got, "total_count": total_items,
+                "next_task": f"{nxt['label']} ({nxt['detail']})" if nxt else "",
+                "deadline": deadline.isoformat() if deadline else None, "days_left": days_left,
+                "status": "overdue" if days_left is not None and days_left < 0
+                else "due_soon" if days_left is not None and days_left <= 3 else "on_track",
+            })
+    queue.sort(key=lambda q: (q["days_left"] if q["days_left"] is not None else 9999))
+
+    def count_parcels(direction, statuses_in):
+        return shipments.count_documents({"direction": direction, "status": {"$in": statuses_in}})
+    parcels = {
+        "to_create": count_parcels("to_employee", ["pending"]),
+        "to_post": count_parcels("to_employee", ["order_created"]),
+        "on_the_way": count_parcels("to_employee", ["dropped_off"]),
+        "returns_to_review": shipments.count_documents({"direction": "return", "status": "dropped_off",
+                                                         "submitted_by_employee": True}),
+        "returns_on_the_way": shipments.count_documents({"direction": "return", "status": "dropped_off",
+                                                          "submitted_by_employee": {"$ne": True}}),
+    }
+
+    week_end = (today + timedelta(days=7)).isoformat()
+    upcoming = [{"title": b.get("title"), "date": b.get("date"), "start_time": b.get("start_time"),
+                 "duration_minutes": b.get("duration_minutes"), "mode": b.get("mode") or "in_person",
+                 "employee_name": b.get("employee_name"), "attendee_count": len(b.get("attendees") or [])}
+                for b in bookings.find({"date": {"$gte": today.isoformat(), "$lte": week_end}}).sort(
+                    [("date", 1), ("start_time", 1)]).limit(8)]
+
+    soon = (today + timedelta(days=90)).isoformat()
+    warranties = []
+    for e in equipment.find({"warranty_expiry": {"$gte": today.isoformat(), "$lte": soon + "T23:59:59"},
+                             "status": {"$ne": "lost"}}).sort("warranty_expiry", 1).limit(6):
+        ends = _as_date(e.get("warranty_expiry"))
+        warranties.append({"equipment_id": str(e["_id"]), "name": e.get("name"), "type": e.get("type"),
+                           "asset_tag": e.get("asset_tag") or "", "photo_url": e.get("photo_url"),
+                           "warranty_expiry": ends.isoformat() if ends else None,
+                           "days_left": (ends - today).days if ends else None,
+                           "assigned_to": e.get("assigned_to_employee_name")})
+
+    unread = sum(r["unread_count"] for r in _staff_inbox("it", "it_thread_read_by_it_at"))
+    return jsonify({
+        "equipment": {"total": total, **statuses, "holders": holders, "by_type": by_type},
+        "queue": queue,
+        "new_hires_open": sum(1 for q in queue if q["process"] == "onboarding"),
+        "returns_open": sum(1 for q in queue if q["process"] == "offboarding"),
+        "parcels": parcels,
+        "upcoming_sessions": upcoming,
+        "warranties": warranties,
         "unread_messages": unread,
     }), 200
 
@@ -5458,7 +5802,7 @@ def _send_offboarding_email(emp, subject, body_text, advance=True):
     if not to_email:
         return False, "This employee has no email address."
     try:
-        send_email(to_email=to_email, subject=subject, html_body=_plain_email_html(body_text))
+        send_email(to_email=to_email, subject=subject, html_body=_offboarding_email_html(emp, body_text))
     except Exception as exc:  # noqa: BLE001
         return False, f"Could not send email: {exc}"
     now = datetime.now(timezone.utc).isoformat()
@@ -5572,18 +5916,6 @@ def _send_email_step(emp, node, process):
     users.update_one({"employee_id": eid}, {"$set": {f"{key}.done_at": datetime.now(timezone.utc).isoformat()},
                                             "$unset": {f"{key}.error": ""}})
     return True
-
-
-# ---------- IT accepting a request: what it changes ----------
-
-def _it_accept_text(employee_id, kind):
-    """Shown in the flow step's hint, so HR can see whether IT has picked it up."""
-    m = messages.find_one({"employee_id": employee_id, "kind": kind, "request_status": "open"})
-    if not m:
-        return ""
-    if m.get("accepted"):
-        return f"IT accepted it ({m.get('accepted_by') or 'IT'}, {str(m.get('accepted_at') or '')[:10]}). "
-    return "IT hasn't accepted it yet. "
 
 
 # ---------- Documents and surveys as lines on the employee's own checklist ----------
@@ -6032,6 +6364,10 @@ def create_booking():
     doc.update(extra)
     result = bookings.insert_one(doc)
     _email_booking(doc)
+    if g.current_user.get("role") == "it":
+        _notify("hr", None, "notification", f"IT booked a session: {title}",
+                f"{_clock_text(date, start_time)}" + (f" with {employee_name}." if employee_name else "."),
+                {"type": "schedule"})
     doc["_id"] = str(result.inserted_id)
     doc["meeting_warning"] = warning  # response only - not stored
     # A hand-booked exit interview satisfies that step of the offboarding flow.
@@ -6376,17 +6712,40 @@ def _shipment_items(employee_doc, direction):
         "assigned_to_employee_id": employee_doc["employee_id"], "status": "assigned",
     }))
     if assigned:
-        return [{"name": e.get("name"), "type": e.get("type"), "asset_tag": e.get("asset_tag") or ""}
-                for e in assigned]
+        return [_asset_card(e) for e in assigned]
     if direction == "to_employee":
         return [{"name": n, "type": None, "asset_tag": ""} for n in (employee_doc.get("equipment_needed") or [])]
     return []
+
+
+def _parcel_items(doc):
+    """What the card shows as in the parcel, read live: the equipment
+    assigned to the employee right now (so items assigned after the parcel
+    was created appear, with their photo and ID); once nothing is assigned
+    any more (a return that has come back), the items saved on the parcel,
+    with their photo looked up again."""
+    assigned = list(equipment.find({"assigned_to_employee_id": doc["employee_id"], "status": "assigned"}))
+    if assigned:
+        return [_asset_card(e) for e in assigned]
+    out = []
+    for it in doc.get("items") or []:
+        found = None
+        try:
+            if it.get("equipment_id"):
+                found = equipment.find_one({"_id": ObjectId(it["equipment_id"])})
+        except Exception:  # noqa: BLE001
+            found = None
+        if found is None and it.get("asset_tag"):
+            found = equipment.find_one({"asset_tag": it["asset_tag"]})
+        out.append(_asset_card(found) if found else {**it, "photo_url": None, "serial_number": ""})
+    return out
 
 
 def _shipment_public(doc):
     """The shipment plus everything IT needs on the card, read live from
     the employee record so an address fix is picked up immediately."""
     out = {**doc, "_id": str(doc["_id"])}
+    out["items"] = _parcel_items(doc)
     emp = users.find_one({"employee_id": doc["employee_id"]}) or {}
     out["recipient"] = {
         "name": emp.get("full_name") or doc.get("employee_name"),
@@ -6435,6 +6794,7 @@ def shipment_eligible_employees():
             "full_name": d["full_name"],
             "department": d.get("department"),
             "work_location_type": d.get("work_location_type"),
+            "profile_image_url": d.get("profile_image_url"),
             "onboarding_started": bool((d.get("onboarding_status") or {}).get("started")),
             "offboarding_started": bool((d.get("offboarding_status") or {}).get("started")),
             "assigned_count": equipment.count_documents({
@@ -6536,6 +6896,15 @@ def update_shipment(shipment_id):
 
     shipments.update_one({"_id": doc["_id"]}, {"$set": updates})
     new_status = updates.get("status")
+    if new_status in ("dropped_off", "delivered") and new_status != doc.get("status"):
+        ref = updates.get("pos_reference") or doc.get("pos_reference") or ""
+        name = doc.get("employee_name") or "an employee"
+        if doc.get("direction") == "to_employee":
+            title = f"Parcel {'posted' if new_status == 'dropped_off' else 'delivered'}: {name}"
+        else:
+            title = f"Return parcel {'on its way' if new_status == 'dropped_off' else 'received'}: {name}"
+        _notify("hr", None, "notification", title, f"Pos Malaysia{f' {ref}' if ref else ''}.",
+                {"type": "shipments"}, dedupe_key=f"hr-shipment:{doc['_id']}:{new_status}")
     if new_status in ("dropped_off", "delivered") and doc.get("direction") == "to_employee":
         ref = updates.get("pos_reference") or doc.get("pos_reference") or ""
         _notify("employee", doc["employee_id"], "notification",
@@ -6544,6 +6913,36 @@ def update_shipment(shipment_id):
                 else "Your equipment has been delivered.",
                 {"type": "onboarding"}, dedupe_key=f"shipment:{doc['_id']}:{new_status}")
     _advance_safely(doc["employee_id"])
+    return jsonify(_shipment_public(shipments.find_one({"_id": doc["_id"]}))), 200
+
+
+@app.post("/api/shipments/<shipment_id>/reject")
+@require_hr_or_it
+def reject_return_shipment(shipment_id):
+    """IT cancelling a leaver's return parcel because the details aren't
+    right (wrong tracking number, unreadable QR, ...). The parcel is closed
+    off, the employee is told why and asked to send it again - their
+    tracking number and QR are cleared so they can redo them."""
+    doc = _get_shipment_or_404(shipment_id)
+    if not doc:
+        return jsonify({"message": "Shipment not found."}), 404
+    if doc.get("direction") != "return":
+        return jsonify({"message": "Only return parcels can be sent back to the employee."}), 400
+    if doc.get("status") in ("delivered", "cancelled"):
+        return jsonify({"message": "This parcel is already closed."}), 400
+    reason = ((request.get_json(silent=True) or {}).get("reason") or "").strip()[:300]
+    now = datetime.now(timezone.utc).isoformat()
+    shipments.update_one({"_id": doc["_id"]}, {"$set": {
+        "status": "cancelled", "cancelled_at": now, "cancel_reason": reason}})
+    users.update_one({"employee_id": doc["employee_id"]}, {
+        "$set": {"offboarding_status.return_rejected": {"reason": reason, "at": now}},
+        "$unset": {"offboarding_status.posted_at": "", "offboarding_status.return_qr_url": ""}})
+    ref = doc.get("pos_reference") or ""
+    _notify("employee", doc["employee_id"], "notification", "Please send your return parcel details again",
+            f"IT couldn't accept your return parcel{f' ({ref})' if ref else ''}"
+            + (f": {reason}." if reason else ".")
+            + " Please check it and send the tracking number and QR code again.",
+            {"type": "offboarding"})
     return jsonify(_shipment_public(shipments.find_one({"_id": doc["_id"]}))), 200
 
 
@@ -6719,25 +7118,41 @@ def run_reminder_checks():
                        dedupe_key=f"{key}:{eid}:{today}"):
                 counts["reminders"] += 1
 
-    # ---- IT: equipment requests still waiting ----
-    for req in messages.find({"target_role": "it", "kind": "equipment_request", "request_status": "open"}):
-        emp = users.find_one({"employee_id": req["employee_id"], "role": "employee"})
-        if not emp:
-            continue
-        created = _parse_iso(req.get("created_at"))
-        if not created or (now - created).days < 3:
-            continue
-        items, _extra, ready, _at = _equipment_fulfilment(emp)
-        if ready:
-            continue
-        missing = [i["type"] for i in items if not i["assigned"]]
-        facts = (f"Reminder for the IT team. IT still has to assign {', '.join(missing)} to {emp['full_name']}. "
-                 f"The request was opened {(now - created).days} days ago.")
-        fallback = f"{emp['full_name']} is still waiting for: {', '.join(missing)}."
-        if _notify("it", None, "reminder", f"Equipment still pending: {emp['full_name']}",
-                   _ai_reminder_text(facts, fallback), {"type": "requests"},
-                   dedupe_key=f"it_equipment:{emp['employee_id']}:{today}"):
-            counts["reminders"] += 1
+    # ---- IT: requests / returns not finished yet (once a day each) ----
+    # Nothing to accept by hand: a request is done when the work is (see
+    # _it_onboarding_tasks / _it_return_tasks). Until then IT is reminded,
+    # daily from 3 days before the deadline (start date / last working day),
+    # or once the request has waited 2 days.
+    for kind, deadline_of, tasks_of, title in (
+            ("equipment_request", lambda e, r: _as_date(e.get("hire_date")),
+             lambda e, r: _it_onboarding_tasks(e), "Equipment still to prepare"),
+            ("equipment_return_request",
+             lambda e, r: _as_date((e.get("offboarding_status") or {}).get("last_working_day")),
+             lambda e, r: _it_return_tasks(e, r), "Equipment still to collect")):
+        for req in messages.find({"target_role": "it", "kind": kind, "request_status": "open"}):
+            emp = users.find_one({"employee_id": req["employee_id"], "role": "employee"})
+            if not emp:
+                continue
+            tasks, done = tasks_of(emp, req)
+            if done:
+                continue
+            deadline = deadline_of(emp, req)
+            days_left = (deadline - today).days if deadline else None
+            created = _parse_iso(req.get("created_at"))
+            waited = (now - created).days if created else 0
+            if not ((days_left is not None and days_left <= 3) or waited >= 2):
+                continue
+            left = "; ".join(f"{t['label']} ({t['detail']})" for t in tasks if not t["done"])
+            due = ("" if days_left is None else
+                   f" Deadline {deadline.strftime('%d %b %Y')} ({'overdue' if days_left < 0 else 'today' if days_left == 0 else f'in {days_left} day(s)'}).")
+            facts = (f"Reminder for the IT team about {emp['full_name']} "
+                     f"({'new hire' if kind == 'equipment_request' else 'leaving the company'}). "
+                     f"Still not done: {left}.{due}")
+            fallback = f"{emp['full_name']}: {left}.{due}"
+            if _notify("it", None, "reminder", f"{title}: {emp['full_name']}",
+                       _ai_reminder_text(facts, fallback), {"type": "requests"},
+                       dedupe_key=f"it_task:{kind}:{emp['employee_id']}:{today}"):
+                counts["reminders"] += 1
 
     # ---- HR: anything delayed / at risk, and unsent welcome emails ----
     for rec in _lifecycle_records():
@@ -6801,7 +7216,34 @@ def staff_notifications():
     role, who = g.current_user.get("role"), g.current_user.get("email")
     docs = list(notifications.find({"recipient_role": role}).sort("created_at", -1).limit(40))
     unread = notifications.count_documents({"recipient_role": role, "read_by": {"$ne": who}})
-    return jsonify({"notifications": [_staff_view(d, who) for d in docs], "unread_count": unread}), 200
+    # Unread per link type, for the red counts on the sidebar tabs.
+    by_type = {}
+    # Unread employee messages (not bell items) - counted for the Messages tab.
+    chats = sum(r["unread_count"] for r in _staff_inbox(
+        "hr" if role == "hr" else "it", "hr_thread_read_by_hr_at" if role == "hr" else "it_thread_read_by_it_at"))
+    if chats:
+        by_type["chat"] = chats
+    for row in notifications.aggregate([
+            {"$match": {"recipient_role": role, "read_by": {"$ne": who}}},
+            {"$group": {"_id": "$link.type", "n": {"$sum": 1}}}]):
+        if row["_id"]:
+            by_type[row["_id"]] = row["n"]
+    return jsonify({"notifications": [_staff_view(d, who) for d in docs], "unread_count": unread,
+                    "unread_by_type": by_type}), 200
+
+
+@app.post("/api/staff/notifications/read-types")
+@require_hr_or_it
+def staff_notifications_read_types():
+    """Opening a tab (e.g. IT's Messages) marks the notifications that point
+    to it as read, so its red count clears - same as reading them in the bell."""
+    types = [str(t) for t in ((request.get_json(silent=True) or {}).get("types") or [])][:10]
+    if types:
+        notifications.update_many(
+            {"recipient_role": g.current_user.get("role"), "link.type": {"$in": types}},
+            {"$addToSet": {"read_by": g.current_user.get("email")}},
+        )
+    return jsonify({"message": "Marked as read."}), 200
 
 
 @app.post("/api/staff/notifications/<notification_id>/read")
