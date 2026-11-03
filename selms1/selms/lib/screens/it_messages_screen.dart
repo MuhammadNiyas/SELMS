@@ -10,7 +10,6 @@ import '../widgets/employee_avatar.dart';
 import '../theme/selms_colors.dart';
 import '../widgets/it_app_shell.dart';
 import '../widgets/message_thread_panel.dart';
-import 'it_requests_view.dart';
 
 class ItMessagesScreen extends StatefulWidget {
   const ItMessagesScreen({super.key, required this.apiBaseUrl, required this.itToken});
@@ -26,8 +25,6 @@ class _ItMessagesScreenState extends State<ItMessagesScreen> {
   late final ApiClient _api = ApiClient(baseUrl: widget.apiBaseUrl, hrToken: widget.itToken);
   List<MessageConversation> _conversations = [];
   String? _selectedEmployeeId;
-  String _tab = 'requests'; // requests | conversations
-  int _openRequests = 0;
   bool _loading = true;
   String? _error;
 
@@ -55,40 +52,6 @@ class _ItMessagesScreenState extends State<ItMessagesScreen> {
     }
   }
 
-  Widget _tabButton(String label, String value, {int badge = 0}) {
-    final active = _tab == value;
-    return InkWell(
-      onTap: () => setState(() => _tab = value),
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
-        decoration: BoxDecoration(
-          color: active ? SelmsColors.ink : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(label,
-                style: TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w500,
-                    color: active ? Colors.white : SelmsColors.textSecondary)),
-            if (badge > 0) ...[
-              const SizedBox(width: 7),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                decoration: BoxDecoration(color: SelmsColors.rose, borderRadius: BorderRadius.circular(10)),
-                child: Text('$badge',
-                    style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.w700)),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return ItAppShell(
@@ -102,36 +65,10 @@ class _ItMessagesScreenState extends State<ItMessagesScreen> {
           children: [
             const Text('Messages',
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: SelmsColors.textPrimary)),
-            Text(
-                _tab == 'requests'
-                    ? 'Equipment requests from HR — what to prepare, for whom, and how far along it is.'
-                    : 'Conversations with employees who\'ve written in.',
-                style: const TextStyle(fontSize: 13, color: SelmsColors.textSecondary)),
+            const Text('Conversations with employees who\'ve written in.',
+                style: TextStyle(fontSize: 13, color: SelmsColors.textSecondary)),
             const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(3),
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10)),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _tabButton('Requests', 'requests', badge: _openRequests),
-                  _tabButton('Conversations', 'conversations'),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-            Expanded(
-              child: _tab == 'requests'
-                  ? ItRequestsView(
-                      api: _api,
-                      apiBaseUrl: widget.apiBaseUrl,
-                      itToken: widget.itToken,
-                      onOpenCount: (n) {
-                        if (n != _openRequests && mounted) setState(() => _openRequests = n);
-                      },
-                    )
-                  : _buildBody(),
-            ),
+            Expanded(child: _buildBody()),
           ],
         ),
       ),

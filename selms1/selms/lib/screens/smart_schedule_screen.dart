@@ -16,7 +16,7 @@ import '../widgets/app_shell.dart';
 import '../widgets/it_app_shell.dart';
 import '../widgets/scheduling_dialog.dart';
 import 'lifecycle_insights_screen.dart';
-import 'it_messages_screen.dart';
+import 'it_requests_screen.dart';
 import 'it_shipments_screen.dart';
 
 class SmartScheduleScreen extends StatefulWidget {
@@ -517,7 +517,7 @@ class _SmartScheduleScreenState extends State<SmartScheduleScreen> {
       Navigator.of(context).push(MaterialPageRoute(
         builder: (_) => s['kind'] == 'shipment'
             ? ItShipmentsScreen(apiBaseUrl: widget.apiBaseUrl, itToken: widget.hrToken)
-            : ItMessagesScreen(apiBaseUrl: widget.apiBaseUrl, itToken: widget.hrToken),
+            : ItRequestsScreen(apiBaseUrl: widget.apiBaseUrl, itToken: widget.hrToken),
       ));
       return;
     }

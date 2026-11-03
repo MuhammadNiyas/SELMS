@@ -515,6 +515,17 @@ class ApiClient {
     return (jsonDecode(res.body) as Map<String, dynamic>)['qr_image_url'] as String;
   }
 
+  /// Return parcel: IT can't accept it - the employee is told why and sends it again.
+  Future<Map<String, dynamic>> rejectReturnShipment(String id, String reason) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/shipments/$id/reject'),
+      headers: _headers,
+      body: jsonEncode({'reason': reason}),
+    );
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   Future<void> deleteShipment(String id) async {
     final res = await http.delete(Uri.parse('$baseUrl/api/shipments/$id'), headers: _headers);
     if (res.statusCode != 200) throw ApiException(_extractMessage(res));
@@ -661,6 +672,13 @@ class ApiClient {
   /// Everything HR's dashboard shows, in one call (see hr_dashboard on the
   /// backend): headcount, onboarding / offboarding summaries, the people in
   /// progress, HR's to-dos, the next week's sessions, equipment and messages.
+  /// IT's dashboard: equipment, the work queue, parcels, sessions, warranties, messages.
+  Future<Map<String, dynamic>> getItDashboard() async {
+    final res = await http.get(Uri.parse('$baseUrl/api/it/dashboard'), headers: _headers);
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   Future<Map<String, dynamic>> getHrDashboard() async {
     final res = await http.get(Uri.parse('$baseUrl/api/hr/dashboard'), headers: _headers);
     if (res.statusCode != 200) throw ApiException(_extractMessage(res));
@@ -853,8 +871,23 @@ class ApiClient {
   }
 
   /// Remote leaver: "I've posted it" - returns the refreshed page data.
-  Future<Map<String, dynamic>> markReturnPosted() async {
-    final res = await http.post(Uri.parse('$baseUrl/api/employee/me/returns/posted'), headers: _headers);
+  /// Remote leaver: the QR screenshot Pos gave them for the return parcel (IT sees it).
+  Future<Map<String, dynamic>> uploadMyReturnQr(List<int> bytes, String filename) async {
+    final request = http.MultipartRequest('POST', Uri.parse('$baseUrl/api/employee/me/returns/qr'))
+      ..headers['Authorization'] = 'Bearer $hrToken';
+    request.files.add(http.MultipartFile.fromBytes('qr', bytes, filename: filename));
+    final res = await http.Response.fromStream(await request.send());
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Remote leaver: posted the parcel they booked on Pos - sends the tracking number to IT.
+  Future<Map<String, dynamic>> markReturnPosted(String trackingNumber) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/employee/me/returns/posted'),
+      headers: _headers,
+      body: jsonEncode({'tracking_number': trackingNumber}),
+    );
     if (res.statusCode != 200) throw ApiException(_extractMessage(res));
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
@@ -1251,6 +1284,16 @@ class ApiClient {
     if (res.statusCode != 200) throw ApiException(_extractMessage(res));
   }
 
+  /// Opening a sidebar tab: marks the notifications that point to it as read.
+  Future<void> markStaffNotificationTypesRead(List<String> types) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/staff/notifications/read-types'),
+      headers: _headers,
+      body: jsonEncode({'types': types}),
+    );
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+  }
+
   /// IT's equipment requests with live assigned/not-assigned status and the
   /// employee + Microsoft-account details (IT token only).
   /// Returns {requests: [...], notices: [...]} - notices are short automatic
@@ -1270,6 +1313,15 @@ class ApiClient {
   Future<void> acceptMessage(String messageId) async {
     final res = await http.post(
       Uri.parse('$baseUrl/api/it/messages/$messageId/accept'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+  }
+
+  /// IT confirming a leaver with no equipment on record has nothing to hand back.
+  Future<void> confirmNothingToCollect(String messageId) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/it/returns/$messageId/nothing-to-collect'),
       headers: _headers,
     );
     if (res.statusCode != 200) throw ApiException(_extractMessage(res));

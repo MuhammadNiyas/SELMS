@@ -100,6 +100,7 @@ class _ItScanScreenState extends State<ItScanScreen> {
             context: context,
             builder: (_) => ReturnEquipmentDialog(
               equipment: e,
+              apiBaseUrl: widget.apiBaseUrl,
               onConfirm: (condition, notes) async {
                 try {
                   await _api.returnEquipment(e.id, condition: condition, notes: notes);

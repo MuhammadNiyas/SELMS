@@ -8,6 +8,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../models/equipment.dart';
 import '../services/api_client.dart';
 import '../theme/selms_colors.dart';
+import '../widgets/employee_avatar.dart';
 import '../widgets/form_fields.dart' show SquarePhotoViewDialog;
 import 'edit_equipment_screen.dart';
 
@@ -119,6 +120,7 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
       context: context,
       builder: (_) => ReturnEquipmentDialog(
         equipment: e,
+        apiBaseUrl: widget.apiBaseUrl,
         onConfirm: (condition, notes) async {
           try {
             await _api.returnEquipment(e.id, condition: condition, notes: notes);
@@ -312,11 +314,11 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
                     children: [
                       Row(
                         children: [
-                          CircleAvatar(
-                            radius: 18,
-                            backgroundColor: SelmsColors.accentBg,
-                            child: Text(_employeeInitials(e.assignedToEmployeeName!),
-                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: SelmsColors.ink)),
+                          EmployeeAvatar(
+                            apiBaseUrl: widget.apiBaseUrl,
+                            name: e.assignedToEmployeeName!,
+                            photoUrl: e.assignedToEmployeePhotoUrl,
+                            size: 36,
                           ),
                           const SizedBox(width: 10),
                           Expanded(
@@ -423,13 +425,6 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
     );
   }
 
-  String _employeeInitials(String name) {
-    final parts = name.trim().split(RegExp(r'\s+'));
-    if (parts.isEmpty || parts.first.isEmpty) return '?';
-    if (parts.length == 1) return parts[0].substring(0, 1).toUpperCase();
-    return (parts.first.substring(0, 1) + parts.last.substring(0, 1)).toUpperCase();
-  }
-
   String _formatAssignedDate(String? iso) {
     if (iso == null) return '—';
     final d = DateTime.tryParse(iso);
@@ -496,9 +491,12 @@ class _EquipmentDetailScreenState extends State<EquipmentDetailScreen> {
 /// return, which decides whether the item goes back to Available or
 /// routes to Under repair (see the /return backend route).
 class ReturnEquipmentDialog extends StatefulWidget {
-  const ReturnEquipmentDialog({required this.equipment, required this.onConfirm});
+  const ReturnEquipmentDialog({required this.equipment, required this.onConfirm, this.apiBaseUrl = ''});
 
   final Equipment equipment;
+
+  /// For the employee's photo.
+  final String apiBaseUrl;
   final Future<void> Function(String? condition, String? notes) onConfirm;
 
   @override
@@ -509,13 +507,6 @@ class ReturnEquipmentDialogState extends State<ReturnEquipmentDialog> {
   String _condition = 'Good';
   final _notesCtrl = TextEditingController();
   bool _confirming = false;
-
-  String _employeeInitials(String name) {
-    final parts = name.trim().split(RegExp(r'\s+'));
-    if (parts.isEmpty || parts.first.isEmpty) return '?';
-    if (parts.length == 1) return parts[0].substring(0, 1).toUpperCase();
-    return (parts.first.substring(0, 1) + parts.last.substring(0, 1)).toUpperCase();
-  }
 
   @override
   void dispose() {
@@ -577,11 +568,12 @@ class ReturnEquipmentDialogState extends State<ReturnEquipmentDialog> {
                   decoration: BoxDecoration(color: const Color(0xFFEAF3FB), borderRadius: BorderRadius.circular(10)),
                   child: Row(
                     children: [
-                      CircleAvatar(
-                        radius: 16,
-                        backgroundColor: Colors.white,
-                        child: Text(_employeeInitials(e.assignedToEmployeeName!),
-                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: SelmsColors.ink)),
+                      EmployeeAvatar(
+                        apiBaseUrl: widget.apiBaseUrl,
+                        name: e.assignedToEmployeeName!,
+                        photoUrl: e.assignedToEmployeePhotoUrl,
+                        size: 32,
+                        background: Colors.white,
                       ),
                       const SizedBox(width: 10),
                       Expanded(

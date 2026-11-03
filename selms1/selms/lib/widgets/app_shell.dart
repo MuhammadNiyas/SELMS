@@ -18,9 +18,11 @@ import '../screens/hr_shipments_screen.dart';
 import '../screens/smart_schedule_screen.dart';
 import '../screens/hr_messages_screen.dart';
 import '../screens/employee_view_screen.dart';
-import '../screens/it_messages_screen.dart';
+import '../screens/it_requests_screen.dart';
 import '../screens/it_products_screen.dart';
+import '../screens/it_shipments_screen.dart';
 import 'chat_panel.dart';
+import 'tab_badges.dart';
 
 enum SelmsRoute { dashboard, employees, onboarding, offboarding, insights, shipments, products, smartSchedule, messages }
 
@@ -45,6 +47,30 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   bool _collapsed = false;
   bool _chatOpen = false;
+
+  // Red counts on the tabs; opening one clears its own.
+  late final TabBadgePoller _badges = TabBadgePoller(
+    ApiClient(baseUrl: widget.apiBaseUrl, hrToken: widget.hrToken),
+    openTypes: switch (widget.activeRoute) {
+      SelmsRoute.smartSchedule => hrScheduleTypes,
+      SelmsRoute.insights => hrLifecycleTypes,
+      SelmsRoute.products => hrProductsTypes,
+      SelmsRoute.shipments => hrShipmentsTypes,
+      _ => const <String>[],
+    },
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _badges.start();
+  }
+
+  @override
+  void dispose() {
+    _badges.stop();
+    super.dispose();
+  }
 
   void _openChat() {
     if (_chatOpen) return;
@@ -255,6 +281,7 @@ class _Sidebar extends StatelessWidget {
           _NavItem(
             icon: Icons.insights_outlined,
             label: 'Lifecycle Insights',
+            badge: const TabBadge(types: hrLifecycleTypes),
             active: activeRoute == SelmsRoute.insights,
             onTap: () {
               if (activeRoute == SelmsRoute.insights) return;
@@ -268,6 +295,7 @@ class _Sidebar extends StatelessWidget {
           _NavItem(
             icon: Icons.calendar_month_outlined,
             label: 'Smart Schedule',
+            badge: const TabBadge(types: hrScheduleTypes),
             active: activeRoute == SelmsRoute.smartSchedule,
             onTap: () {
               if (activeRoute == SelmsRoute.smartSchedule) return;
@@ -281,6 +309,7 @@ class _Sidebar extends StatelessWidget {
           _NavItem(
             icon: Icons.local_shipping_outlined,
             label: 'Shipments',
+            badge: const TabBadge(types: hrShipmentsTypes),
             active: activeRoute == SelmsRoute.shipments,
             onTap: () {
               if (activeRoute == SelmsRoute.shipments) return;
@@ -294,6 +323,7 @@ class _Sidebar extends StatelessWidget {
           _NavItem(
             icon: Icons.inventory_2_outlined,
             label: 'Products',
+            badge: const TabBadge(types: hrProductsTypes),
             active: activeRoute == SelmsRoute.products,
             onTap: () {
               if (activeRoute == SelmsRoute.products) return;
@@ -308,6 +338,7 @@ class _Sidebar extends StatelessWidget {
           _NavItem(
             icon: Icons.chat_bubble_outline,
             label: 'Messages',
+            badge: const TabBadge(types: hrMessagesTypes),
             active: activeRoute == SelmsRoute.messages,
             onTap: () {
               if (activeRoute == SelmsRoute.messages) return;
@@ -342,12 +373,16 @@ class _NavItem extends StatelessWidget {
     required this.label,
     required this.active,
     required this.onTap,
+    this.badge,
   });
 
   final IconData icon;
   final String label;
   final bool active;
   final VoidCallback onTap;
+
+  /// Red unread count, at the end of the row.
+  final Widget? badge;
 
   @override
   Widget build(BuildContext context) {
@@ -377,6 +412,7 @@ class _NavItem extends StatelessWidget {
                 ),
               ),
             ),
+            ?badge,
           ],
         ),
       ),
@@ -460,11 +496,18 @@ class _NotificationBellState extends State<NotificationBell> {
     _api = ApiClient(baseUrl: session.apiBaseUrl, hrToken: session.token);
     _load();
     _poll = Timer.periodic(const Duration(seconds: 30), (_) => _load());
+    // A tab opened (and cleared its notifications) - follow it straight away.
+    staffUnreadTotal.addListener(_followTotal);
+  }
+
+  void _followTotal() {
+    if (mounted && staffUnreadTotal.value != _unread) setState(() => _unread = staffUnreadTotal.value);
   }
 
   @override
   void dispose() {
     _poll?.cancel();
+    staffUnreadTotal.removeListener(_followTotal);
     super.dispose();
   }
 
@@ -474,6 +517,7 @@ class _NotificationBellState extends State<NotificationBell> {
     try {
       final data = await api.getStaffNotifications();
       if (!mounted) return;
+      setStaffUnread(data);
       setState(() {
         _items = (data['notifications'] as List).cast<Map<String, dynamic>>();
         _unread = (data['unread_count'] as num?)?.toInt() ?? 0;
@@ -530,9 +574,29 @@ class _NotificationBellState extends State<NotificationBell> {
       Navigator.of(context).push(MaterialPageRoute(
         builder: (_) => LifecycleInsightsScreen(apiBaseUrl: session.apiBaseUrl, hrToken: session.token),
       ));
+    } else if (link['type'] == 'schedule' && _role == 'hr') {
+      Navigator.of(context).pushReplacement(MaterialPageRoute(
+        builder: (_) => SmartScheduleScreen(apiBaseUrl: session.apiBaseUrl, hrToken: session.token),
+      ));
+    } else if (link['type'] == 'products' && _role == 'hr') {
+      Navigator.of(context).pushReplacement(MaterialPageRoute(
+        builder: (_) => ItProductsScreen(apiBaseUrl: session.apiBaseUrl, itToken: session.token, viewOnly: true),
+      ));
+    } else if (link['type'] == 'shipments' && _role == 'hr') {
+      Navigator.of(context).pushReplacement(MaterialPageRoute(
+        builder: (_) => HrShipmentsScreen(apiBaseUrl: session.apiBaseUrl, hrToken: session.token),
+      ));
     } else if (link['type'] == 'requests' && _role == 'it') {
       Navigator.of(context).pushReplacement(MaterialPageRoute(
-        builder: (_) => ItMessagesScreen(apiBaseUrl: session.apiBaseUrl, itToken: session.token),
+        builder: (_) => ItRequestsScreen(apiBaseUrl: session.apiBaseUrl, itToken: session.token),
+      ));
+    } else if (link['type'] == 'shipments' && _role == 'it') {
+      Navigator.of(context).pushReplacement(MaterialPageRoute(
+        builder: (_) => ItShipmentsScreen(
+          apiBaseUrl: session.apiBaseUrl,
+          itToken: session.token,
+          initialDirection: link['direction'] as String?,
+        ),
       ));
     }
   }

@@ -23,10 +23,13 @@ import '../widgets/it_app_shell.dart';
 
 /// IT's Shipments tab: the full, editable page inside IT's own sidebar shell.
 class ItShipmentsScreen extends StatelessWidget {
-  const ItShipmentsScreen({super.key, required this.apiBaseUrl, required this.itToken});
+  const ItShipmentsScreen({super.key, required this.apiBaseUrl, required this.itToken, this.initialDirection});
 
   final String apiBaseUrl;
   final String itToken;
+
+  /// 'return' opens on the Offboarding (returns) view.
+  final String? initialDirection;
 
   @override
   Widget build(BuildContext context) {
@@ -34,7 +37,7 @@ class ItShipmentsScreen extends StatelessWidget {
       apiBaseUrl: apiBaseUrl,
       itToken: itToken,
       activeRoute: ItRoute.shipments,
-      child: ShipmentsPage(apiBaseUrl: apiBaseUrl, token: itToken),
+      child: ShipmentsPage(apiBaseUrl: apiBaseUrl, token: itToken, initialDirection: initialDirection),
     );
   }
 }
@@ -43,11 +46,18 @@ class ItShipmentsScreen extends StatelessWidget {
 /// can see every parcel, its status and Pos reference, and track it, but
 /// not change anything).
 class ShipmentsPage extends StatefulWidget {
-  const ShipmentsPage({super.key, required this.apiBaseUrl, required this.token, this.readOnly = false});
+  const ShipmentsPage({
+    super.key,
+    required this.apiBaseUrl,
+    required this.token,
+    this.readOnly = false,
+    this.initialDirection,
+  });
 
   final String apiBaseUrl;
   final String token;
   final bool readOnly;
+  final String? initialDirection;
 
   @override
   State<ShipmentsPage> createState() => _ShipmentsPageState();
@@ -59,7 +69,7 @@ class _ShipmentsPageState extends State<ShipmentsPage> {
   List<Map<String, dynamic>> _all = [];
   bool _loading = true;
   String? _error;
-  String _direction = 'to_employee'; // to_employee | return
+  late String _direction = widget.initialDirection == 'return' ? 'return' : 'to_employee'; // to_employee | return
   String? _expandedId;
 
   @override
@@ -321,17 +331,6 @@ class _ShipmentsPageState extends State<ShipmentsPage> {
             const SizedBox(height: 12),
             Text(outgoing ? 'No equipment shipments yet' : 'No equipment returns yet',
                 style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: SelmsColors.textPrimary)),
-            const SizedBox(height: 6),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 380),
-              child: Text(
-                outgoing
-                    ? 'After assigning equipment to a remote new hire, click "New shipment" to prepare their parcel.'
-                    : 'When a remote employee leaves, click "New shipment" to arrange their equipment coming back.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12.5, color: SelmsColors.textMuted, height: 1.4),
-              ),
-            ),
           ],
         ),
       ),
@@ -606,21 +605,7 @@ class _ShipmentCardState extends State<_ShipmentCard> {
                     const Text('Nothing assigned yet — assign equipment first.',
                         style: TextStyle(fontSize: 12, color: SelmsColors.textMuted))
                   else
-                    ..._items.map((i) => Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 2),
-                          child: Row(
-                            children: [
-                              const Icon(Icons.inventory_2_outlined, size: 13, color: SelmsColors.textMuted),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  '${i['name']}${(i['asset_tag'] as String?)?.isNotEmpty == true ? '  ·  ${i['asset_tag']}' : ''}',
-                                  style: const TextStyle(fontSize: 12.5, color: SelmsColors.textSecondary),
-                                ),
-                              ),
-                            ],
-                          ),
-                        )),
+                    ..._items.map(_parcelItem),
                 ],
               ),
             ),
@@ -634,18 +619,20 @@ class _ShipmentCardState extends State<_ShipmentCard> {
                   _heading('POS MALAYSIA ORDER'),
                   const SizedBox(height: 8),
                   if (!widget.readOnly) ...[
-                    ElevatedButton.icon(
-                      onPressed: () => launchUrl(Uri.parse(_s['pos_url'] as String),
-                          mode: LaunchMode.externalApplication),
-                      icon: const Icon(Icons.open_in_new, size: 14),
-                      label: const Text('Open Pos e-Connote', style: TextStyle(fontSize: 12.5)),
-                      style: ElevatedButton.styleFrom(
-                          backgroundColor: SelmsColors.ink, foregroundColor: Colors.white, elevation: 0),
-                    ),
-                    const SizedBox(height: 4),
-                    const Text('Create the order there, then save the reference and QR below.',
-                        style: TextStyle(fontSize: 11, color: SelmsColors.textMuted)),
-                    const SizedBox(height: 14),
+                    if (!_isReturn) ...[
+                      ElevatedButton.icon(
+                        onPressed: () => launchUrl(Uri.parse(_s['pos_url'] as String),
+                            mode: LaunchMode.externalApplication),
+                        icon: const Icon(Icons.open_in_new, size: 14),
+                        label: const Text('Open Pos e-Connote', style: TextStyle(fontSize: 12.5)),
+                        style: ElevatedButton.styleFrom(
+                            backgroundColor: SelmsColors.ink, foregroundColor: Colors.white, elevation: 0),
+                      ),
+                      const SizedBox(height: 4),
+                      const Text('Create the order there, then save the reference and QR below.',
+                          style: TextStyle(fontSize: 11, color: SelmsColors.textMuted)),
+                      const SizedBox(height: 14),
+                    ],
                     const Text('Reference number',
                         style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: SelmsColors.textSecondary)),
                     const SizedBox(height: 4),
@@ -687,9 +674,9 @@ class _ShipmentCardState extends State<_ShipmentCard> {
                     const Text('Copies the reference and opens Pos Malaysia tracking — paste it in if it isn\'t filled in.',
                         style: TextStyle(fontSize: 11, color: SelmsColors.textMuted)),
                   ],
-                  if (!widget.readOnly || (_s['qr_image_url'] as String? ?? '').isNotEmpty) ...[
+                  if (!widget.readOnly || _isReturn || (_s['qr_image_url'] as String? ?? '').isNotEmpty) ...[
                     const SizedBox(height: 14),
-                    const Text('QR code (screenshot from Pos)',
+                    Text(_isReturn ? 'QR code (uploaded by the employee)' : 'QR code (screenshot from Pos)',
                         style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: SelmsColors.textSecondary)),
                     const SizedBox(height: 6),
                     _qrBlock(),
@@ -705,9 +692,9 @@ class _ShipmentCardState extends State<_ShipmentCard> {
           const SizedBox(height: 10),
           Row(
             children: [
-              ..._nextActions(),
+              if (_isReturn) ..._returnActions() else ..._nextActions(),
               const Spacer(),
-              if (_status != 'cancelled' && _status != 'delivered')
+              if (!_isReturn && _status != 'cancelled' && _status != 'delivered')
                 TextButton(
                   onPressed: _busy ? null : () => _setStatus('cancelled'),
                   child: const Text('Cancel shipment', style: TextStyle(fontSize: 12, color: SelmsColors.textSecondary)),
@@ -726,6 +713,155 @@ class _ShipmentCardState extends State<_ShipmentCard> {
         ],
       ],
     );
+  }
+
+  /// A leaver's return parcel: IT either receives it (green), or cancels it
+  /// because the details aren't right - the employee is told and sends it again.
+  List<Widget> _returnActions() {
+    if (_status == 'cancelled') {
+      final why = _s['cancel_reason'] as String? ?? '';
+      return [
+        Flexible(
+          child: Text('Cancelled — the employee was asked to send it again${why.isNotEmpty ? ' ($why)' : ''}.',
+              style: const TextStyle(fontSize: 12, color: SelmsColors.textMuted)),
+        ),
+      ];
+    }
+    if (_status == 'delivered') {
+      return const [
+        Text('Received.', style: TextStyle(fontSize: 12, color: SelmsColors.statusActiveText, fontWeight: FontWeight.w600)),
+      ];
+    }
+    return [
+      Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: ElevatedButton(
+          onPressed: _busy ? null : _receive,
+          style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF16A34A), foregroundColor: Colors.white, elevation: 0),
+          child: const Text('Received', style: TextStyle(fontSize: 12.5)),
+        ),
+      ),
+      OutlinedButton(
+        onPressed: _busy ? null : _rejectReturn,
+        style: OutlinedButton.styleFrom(foregroundColor: SelmsColors.rose),
+        child: const Text('Cancel', style: TextStyle(fontSize: 12.5)),
+      ),
+    ];
+  }
+
+  /// "Received": IT has the parcel - each item in it is received in Products
+  /// with the condition IT picks, which also closes the parcel.
+  Future<void> _receive() async {
+    final toReceive = _items.where((i) => (i['equipment_id'] as String? ?? '').isNotEmpty).toList();
+    final conditions = {for (final i in toReceive) i['equipment_id'] as String: 'Good'};
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          backgroundColor: Colors.white,
+          title: const Text('Parcel received?', style: TextStyle(fontSize: 15)),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  toReceive.isEmpty
+                      ? 'Every item is already back. This closes the parcel.'
+                      : 'Each item is marked returned with the condition below.',
+                  style: const TextStyle(fontSize: 12.5, color: SelmsColors.textSecondary),
+                ),
+                for (final i in toReceive) ...[
+                  const SizedBox(height: 10),
+                  Text('${i['name'] ?? i['type'] ?? 'Item'}${(i['asset_tag'] as String? ?? '').isNotEmpty ? '  ·  ${i['asset_tag']}' : ''}',
+                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 6,
+                    children: [
+                      for (final c in const ['Good', 'Damaged', 'Lost'])
+                        ChoiceChip(
+                          label: Text(c, style: const TextStyle(fontSize: 12)),
+                          selected: conditions[i['equipment_id']] == c,
+                          onSelected: (_) => setD(() => conditions[i['equipment_id'] as String] = c),
+                        ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Back')),
+            ElevatedButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF16A34A), foregroundColor: Colors.white),
+              child: const Text('Received'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok != true || !mounted) return;
+    await _run(() async {
+      for (final e in conditions.entries) {
+        await widget.api.returnEquipment(e.key, condition: e.value, notes: 'Received by post');
+      }
+      return widget.api.updateShipment(_id, status: 'delivered');
+    });
+  }
+
+  /// "Cancel": the details aren't right - asks why, then the employee is told
+  /// and sends the tracking number and QR again.
+  Future<void> _rejectReturn() async {
+    final reasonCtrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: const Text('Cancel this parcel?', style: TextStyle(fontSize: 15)),
+        content: SizedBox(
+          width: 400,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${_s['employee_name'] ?? 'The employee'} gets a notification that the details are not correct '
+                'and is asked to send the tracking number and QR code again.',
+                style: const TextStyle(fontSize: 12.5, color: SelmsColors.textSecondary, height: 1.4),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: reasonCtrl,
+                maxLines: 2,
+                style: const TextStyle(fontSize: 13),
+                decoration: const InputDecoration(
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                  labelText: "What's wrong? (sent to the employee)",
+                  hintText: 'e.g. The tracking number is not found on Pos',
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Back')),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: ElevatedButton.styleFrom(backgroundColor: SelmsColors.rose, foregroundColor: Colors.white),
+            child: const Text('Cancel parcel'),
+          ),
+        ],
+      ),
+    );
+    final reason = reasonCtrl.text.trim();
+    reasonCtrl.dispose();
+    if (ok != true || !mounted) return;
+    await _run(() => widget.api.rejectReturnShipment(_id, reason));
   }
 
   /// The one or two sensible next clicks for the current status.
@@ -748,8 +884,8 @@ class _ShipmentCardState extends State<_ShipmentCard> {
     // "Create" records the order: it saves the reference and moves the
     // shipment on, but only once the reference is typed AND the QR
     // screenshot is uploaded.
-    final readyToCreate =
-        _refCtrl.text.trim().isNotEmpty && ((_s['qr_image_url'] as String?) ?? '').isNotEmpty;
+    final readyToCreate = _refCtrl.text.trim().isNotEmpty &&
+        (_isReturn || ((_s['qr_image_url'] as String?) ?? '').isNotEmpty);
 
     return switch (_status) {
       'pending' => [
@@ -789,9 +925,56 @@ class _ShipmentCardState extends State<_ShipmentCard> {
     );
   }
 
+  /// One item in the parcel: its photo, name and ID (asset tag or serial).
+  Widget _parcelItem(Map<String, dynamic> i) {
+    final photo = i['photo_url'] as String?;
+    final tag = i['asset_tag'] as String? ?? '';
+    final serial = i['serial_number'] as String? ?? '';
+    final id = tag.isNotEmpty ? 'ID: $tag' : (serial.isNotEmpty ? 'S/N: $serial' : 'No ID yet');
+    const icon = Icon(Icons.devices_other_outlined, size: 18, color: SelmsColors.textMuted);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: SelmsColors.border),
+            ),
+            alignment: Alignment.center,
+            child: photo != null && photo.isNotEmpty
+                ? Image.network('${widget.apiBaseUrl}$photo',
+                    width: 40, height: 40, fit: BoxFit.cover, errorBuilder: (_, _, _) => icon)
+                : icon,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${i['name'] ?? i['type'] ?? 'Item'}',
+                    style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500, color: SelmsColors.textPrimary)),
+                Text('${i['type'] != null && i['name'] != null ? '${i['type']}  ·  ' : ''}$id',
+                    style: const TextStyle(fontSize: 11, color: SelmsColors.textMuted)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _qrBlock() {
     final url = _s['qr_image_url'] as String?;
     if (url == null || url.isEmpty) {
+      if (_isReturn) {
+        return const Text("The employee hasn't uploaded it yet.",
+            style: TextStyle(fontSize: 12, color: SelmsColors.textMuted, fontStyle: FontStyle.italic));
+      }
       if (widget.readOnly) return const SizedBox.shrink();
       return OutlinedButton.icon(
         onPressed: _busy ? null : _pickQr,
@@ -843,7 +1026,7 @@ class _ShipmentCardState extends State<_ShipmentCard> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text('Tap to enlarge', style: TextStyle(fontSize: 11, color: SelmsColors.textMuted)),
-            if (!widget.readOnly)
+            if (!widget.readOnly && !_isReturn)
               TextButton(
                 onPressed: _busy ? null : _pickQr,
                 child: const Text('Replace', style: TextStyle(fontSize: 12)),
@@ -1080,12 +1263,10 @@ class _NewShipmentDialogState extends State<_NewShipmentDialog> {
                               return ListTile(
                                 enabled: !blocked && _creatingFor == null,
                                 dense: true,
-                                leading: CircleAvatar(
-                                  radius: 16,
-                                  backgroundColor: SelmsColors.accentBg,
-                                  child: Text((e['full_name'] as String).substring(0, 1).toUpperCase(),
-                                      style: const TextStyle(
-                                          fontSize: 12, fontWeight: FontWeight.w600, color: SelmsColors.ink)),
+                                leading: EmployeeAvatar(
+                                  apiBaseUrl: widget.api.baseUrl,
+                                  name: e['full_name'] as String,
+                                  photoUrl: e['profile_image_url'] as String?,
                                 ),
                                 title: Text(e['full_name'] as String, style: const TextStyle(fontSize: 13)),
                                 subtitle: Text(notes.join(' · '), style: const TextStyle(fontSize: 11)),

@@ -1,22 +1,22 @@
 // lib/screens/it_requests_view.dart
 //
-// IT's equipment requests, one card per onboarding HR has started (plus a
-// simpler "return" card per offboarding: what to collect back). Each
-// card answers "what do I need to do for this person?" in one place:
-// the hire's details, the exact equipment they were approved for with a
-// live assigned / not-assigned status per item, and the account details
-// needed to create their Microsoft account.
+// IT's equipment requests, one card per onboarding HR has started, plus one
+// return card per offboarding (what to collect back). Each card answers
+// "what do I need to do for this person?" in one place: the person's
+// details, every item with its photo and ID, and a task checklist.
 //
-// There is no "done" button. A request completes only when every item is
-// really assigned in the equipment records - the status here is read live
-// from them, so it can't be claimed without doing the work. "Accept" just
-// tells HR that IT has seen the request and is on it.
+// Nothing here is ticked off by hand and there is no "Accept" step: the
+// tasks are read live from the equipment and shipment records, so a request
+// is done the moment the work really is - everything assigned (and, for a
+// remote hire, the Pos parcel posted), or everything back from a leaver.
+// Until then SELMS reminds IT in the bell.
 
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/api_client.dart';
 import '../theme/selms_colors.dart';
+import '../widgets/employee_avatar.dart';
 import 'it_products_screen.dart';
 import 'it_shipments_screen.dart';
 
@@ -117,33 +117,16 @@ class _ItRequestsViewState extends State<ItRequestsView> {
           const SizedBox(width: 10),
           Expanded(
             child: Text(n['content'] as String? ?? '',
-                style: const TextStyle(
-                    fontSize: 12.5, color: SelmsColors.statusOnboardingText, height: 1.35)),
+                style: const TextStyle(fontSize: 12.5, color: SelmsColors.statusOnboardingText, height: 1.35)),
           ),
           TextButton.icon(
             onPressed: () => _dismissNotice(n),
             icon: const Icon(Icons.delete_outline, size: 15, color: SelmsColors.statusOnboardingText),
-            label: const Text('Delete',
-                style: TextStyle(fontSize: 12, color: SelmsColors.statusOnboardingText)),
+            label: const Text('Delete', style: TextStyle(fontSize: 12, color: SelmsColors.statusOnboardingText)),
           ),
         ],
       ),
     );
-  }
-
-  Future<void> _accept(Map<String, dynamic> r) async {
-    try {
-      await widget.api.acceptMessage(r['message_id'] as String);
-      await _load(silent: true);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(e.toString()),
-          backgroundColor: SelmsColors.rose,
-        ),
-      );
-    }
   }
 
   @override
@@ -154,15 +137,9 @@ class _ItRequestsViewState extends State<ItRequestsView> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              _error!,
-              style: const TextStyle(color: SelmsColors.rose, fontSize: 13),
-            ),
+            Text(_error!, style: const TextStyle(color: SelmsColors.rose, fontSize: 13)),
             const SizedBox(height: 10),
-            OutlinedButton(
-              onPressed: () => _load(),
-              child: const Text('Try again'),
-            ),
+            OutlinedButton(onPressed: () => _load(), child: const Text('Try again')),
           ],
         ),
       );
@@ -170,40 +147,17 @@ class _ItRequestsViewState extends State<ItRequestsView> {
     if (_requests.isEmpty && _returns.isEmpty && _notices.isEmpty) {
       return Container(
         width: double.infinity,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-        ),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
         child: const Center(
           child: Padding(
             padding: EdgeInsets.all(32),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(
-                  Icons.inventory_2_outlined,
-                  size: 38,
-                  color: SelmsColors.textMuted,
-                ),
+                Icon(Icons.inventory_2_outlined, size: 38, color: SelmsColors.textMuted),
                 SizedBox(height: 12),
-                Text(
-                  'No equipment requests',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: SelmsColors.textPrimary,
-                  ),
-                ),
-                SizedBox(height: 6),
-                Text(
-                  'When HR starts onboarding someone, their equipment request appears here — '
-                  'and when someone is offboarded, the equipment to collect back.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    color: SelmsColors.textMuted,
-                  ),
-                ),
+                Text('No equipment requests',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: SelmsColors.textPrimary)),
               ],
             ),
           ),
@@ -226,7 +180,6 @@ class _ItRequestsViewState extends State<ItRequestsView> {
             request: r,
             apiBaseUrl: widget.apiBaseUrl,
             itToken: widget.itToken,
-            onAccept: () => _accept(r),
           );
         }
         final ret = _returns[j - _requests.length];
@@ -242,80 +195,148 @@ class _ItRequestsViewState extends State<ItRequestsView> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Pieces both cards use
+// ---------------------------------------------------------------------------
+
+Widget _heading(String t) => Text(
+      t,
+      style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, letterSpacing: 0.6, color: SelmsColors.textMuted),
+    );
+
+Widget _chip(String text, Color bg, Color fg) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      child: Text(text, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
+    );
+
+/// "ID: LAP-0012" - the asset tag, or the serial number when there is no tag.
+String _idText(Map<String, dynamic> item) {
+  final tag = (item['asset_tag'] as String?) ?? '';
+  final serial = (item['serial_number'] as String?) ?? '';
+  if (tag.isNotEmpty) return 'ID: $tag';
+  if (serial.isNotEmpty) return 'S/N: $serial';
+  return 'No ID on record';
+}
+
+/// The product's photo (a device icon when it has none).
+class _AssetThumb extends StatelessWidget {
+  const _AssetThumb({required this.apiBaseUrl, this.photoUrl, this.size = 44});
+
+  final String apiBaseUrl;
+  final String? photoUrl;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = Icon(Icons.devices_other_outlined, size: size * 0.45, color: SelmsColors.textMuted);
+    final url = photoUrl;
+    return Container(
+      width: size,
+      height: size,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: SelmsColors.border),
+      ),
+      alignment: Alignment.center,
+      child: url != null && url.isNotEmpty
+          ? Image.network(url.startsWith('http') ? url : '$apiBaseUrl$url',
+              width: size, height: size, fit: BoxFit.cover, errorBuilder: (_, _, _) => icon)
+          : icon,
+    );
+  }
+}
+
+/// Label / value row with an optional copy button.
+class _Fact extends StatelessWidget {
+  const _Fact(this.label, this.value, {this.copy = false});
+
+  final String label;
+  final String value;
+  final bool copy;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 108,
+            child: Text(label, style: const TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
+          ),
+          Expanded(child: Text(value, style: const TextStyle(fontSize: 12.5, color: SelmsColors.textPrimary))),
+          if (copy && value != '—')
+            InkWell(
+              onTap: () async {
+                await Clipboard.setData(ClipboardData(text: value));
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('$label copied.'), duration: const Duration(seconds: 1)));
+              },
+              borderRadius: BorderRadius.circular(6),
+              child: const Padding(
+                padding: EdgeInsets.all(4),
+                child: Icon(Icons.copy, size: 15, color: SelmsColors.textSecondary),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Onboarding: equipment to prepare for a new hire
+// ---------------------------------------------------------------------------
+
 class _RequestCard extends StatefulWidget {
   const _RequestCard({
     super.key,
     required this.request,
     required this.apiBaseUrl,
     required this.itToken,
-    required this.onAccept,
   });
 
   final Map<String, dynamic> request;
   final String apiBaseUrl;
   final String itToken;
-  final Future<void> Function() onAccept;
 
   @override
   State<_RequestCard> createState() => _RequestCardState();
 }
 
 class _RequestCardState extends State<_RequestCard> {
-  bool _showPassword = false;
-  bool _accepting = false;
   bool _expanded = false; // collapsed shows just the summary row
 
   Map<String, dynamic> get _r => widget.request;
-  Map<String, dynamic> get _emp =>
-      (_r['employee'] as Map).cast<String, dynamic>();
-  Map<String, dynamic> get _account =>
-      (_r['account'] as Map).cast<String, dynamic>();
-  List<Map<String, dynamic>> get _items =>
-      (_r['items'] as List).cast<Map<String, dynamic>>();
-  List<Map<String, dynamic>> get _extra =>
-      ((_r['extra_assigned'] as List?) ?? []).cast<Map<String, dynamic>>();
+  Map<String, dynamic> get _emp => (_r['employee'] as Map).cast<String, dynamic>();
+  Map<String, dynamic> get _account => (_r['account'] as Map).cast<String, dynamic>();
+  List<Map<String, dynamic>> get _items => (_r['items'] as List).cast<Map<String, dynamic>>();
+  List<Map<String, dynamic>> get _extra => ((_r['extra_assigned'] as List?) ?? []).cast<Map<String, dynamic>>();
   bool get _open => _r['status'] == 'open';
   bool get _fulfilled => _r['fulfilled'] == true;
-  bool get _accepted => _r['accepted'] == true;
-
-  Future<void> _copy(String label, String value) async {
-    await Clipboard.setData(ClipboardData(text: value));
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$label copied.'),
-        duration: const Duration(seconds: 1),
-      ),
-    );
-  }
+  bool get _remote => _r['needs_shipping'] == true;
 
   void _goProducts() => Navigator.of(context).pushReplacement(
-    MaterialPageRoute(
-      builder: (_) => ItProductsScreen(
-        apiBaseUrl: widget.apiBaseUrl,
-        itToken: widget.itToken,
-      ),
-    ),
-  );
+        MaterialPageRoute(builder: (_) => ItProductsScreen(apiBaseUrl: widget.apiBaseUrl, itToken: widget.itToken)),
+      );
 
   void _goShipments() => Navigator.of(context).pushReplacement(
-    MaterialPageRoute(
-      builder: (_) => ItShipmentsScreen(
-        apiBaseUrl: widget.apiBaseUrl,
-        itToken: widget.itToken,
-      ),
-    ),
-  );
+        MaterialPageRoute(builder: (_) => ItShipmentsScreen(apiBaseUrl: widget.apiBaseUrl, itToken: widget.itToken)),
+      );
 
-  String _initials(String name) {
-    final parts = name
-        .trim()
-        .split(RegExp(r'\s+'))
-        .where((p) => p.isNotEmpty)
-        .toList();
-    if (parts.isEmpty) return '?';
-    if (parts.length == 1) return parts.first[0].toUpperCase();
-    return (parts.first[0] + parts.last[0]).toUpperCase();
+  /// Header chip for the Pos parcel of a remote hire.
+  Widget _parcelChip() {
+    final status = (_r['shipment'] as Map?)?['status'] as String?;
+    return switch (status) {
+      'dropped_off' || 'delivered' =>
+        _chip(status == 'delivered' ? 'Parcel delivered' : 'Parcel posted', SelmsColors.statusActiveBg, SelmsColors.statusActiveText),
+      'order_created' => _chip('Parcel booked, not posted', SelmsColors.statusOnboardingBg, SelmsColors.statusOnboardingText),
+      _ => _chip('Parcel not created', const Color(0xFFFEE2E2), SelmsColors.statusOffboardingText),
+    };
   }
 
   @override
@@ -331,9 +352,7 @@ class _RequestCardState extends State<_RequestCard> {
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: _fulfilled
-                ? SelmsColors.statusActiveText.withValues(alpha: 0.35)
-                : Colors.transparent,
+            color: _fulfilled ? SelmsColors.statusActiveText.withValues(alpha: 0.35) : Colors.transparent,
           ),
         ),
         clipBehavior: Clip.antiAlias,
@@ -347,185 +366,98 @@ class _RequestCardState extends State<_RequestCard> {
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 14),
                 child: Row(
                   children: [
-                    Container(
-                      width: 42,
-                      height: 42,
-                      clipBehavior: Clip.hardEdge,
-                      decoration: const BoxDecoration(
-                        color: SelmsColors.accentBg,
-                        shape: BoxShape.circle,
-                      ),
-                      alignment: Alignment.center,
-                      child:
-                          (_emp['profile_image_url'] as String?)?.isNotEmpty ==
-                              true
-                          ? Image.network(
-                              '${widget.apiBaseUrl}${_emp['profile_image_url']}',
-                              fit: BoxFit.cover,
-                              width: 42,
-                              height: 42,
-                              errorBuilder: (_, _, _) =>
-                                  Text(_initials(name), style: _initialsStyle),
-                            )
-                          : Text(_initials(name), style: _initialsStyle),
+                    EmployeeAvatar(
+                      apiBaseUrl: widget.apiBaseUrl,
+                      name: name,
+                      photoUrl: _emp['profile_image_url'] as String?,
+                      size: 42,
                     ),
                     const SizedBox(width: 14),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            name,
-                            style: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                              color: SelmsColors.textPrimary,
-                            ),
+                          Row(
+                            children: [
+                              Flexible(
+                                child: Text(name,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        fontSize: 15, fontWeight: FontWeight.w600, color: SelmsColors.textPrimary)),
+                              ),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(
+                                    color: SelmsColors.statusOnboardingBg, borderRadius: BorderRadius.circular(10)),
+                                child: const Text('New hire',
+                                    style: TextStyle(
+                                        fontSize: 10.5,
+                                        fontWeight: FontWeight.w600,
+                                        color: SelmsColors.statusOnboardingText)),
+                              ),
+                            ],
                           ),
                           const SizedBox(height: 2),
                           Text(
                             '${_emp['employee_id']}  ·  ${_emp['job_title'] ?? ''}  ·  ${_emp['department'] ?? ''}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: SelmsColors.textMuted,
-                            ),
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 12, color: SelmsColors.textMuted),
                           ),
                         ],
                       ),
                     ),
                     if (!_open)
-                      _chip(
-                        'Cancelled by HR',
-                        const Color(0xFFF3F4F6),
-                        SelmsColors.textSecondary,
-                      )
+                      _chip('Cancelled by HR', const Color(0xFFF3F4F6), SelmsColors.textSecondary)
+                    else if (_fulfilled)
+                      _chip('Done', SelmsColors.statusActiveBg, SelmsColors.statusActiveText)
                     else ...[
-                      if (_fulfilled)
-                        _chip(
-                          'All equipment assigned',
-                          SelmsColors.statusActiveBg,
-                          SelmsColors.statusActiveText,
-                        )
-                      else
-                        _chip(
-                          '$assigned of $needed assigned',
-                          SelmsColors.statusOnboardingBg,
-                          SelmsColors.statusOnboardingText,
-                        ),
-                      const SizedBox(width: 8),
-                      _accepted
-                          ? _chip(
-                              'Accepted by ${_r['accepted_by']}',
-                              SelmsColors.accentBg,
-                              SelmsColors.ink,
-                            )
-                          : _chip(
-                              'Awaiting acceptance',
-                              const Color(0xFFFEE2E2),
-                              SelmsColors.statusOffboardingText,
-                            ),
+                      _chip('$assigned of $needed assigned',
+                          assigned == needed ? SelmsColors.statusActiveBg : SelmsColors.statusOnboardingBg,
+                          assigned == needed ? SelmsColors.statusActiveText : SelmsColors.statusOnboardingText),
+                      if (_remote) ...[const SizedBox(width: 8), _parcelChip()],
                     ],
                     const SizedBox(width: 10),
-                    Icon(
-                      _expanded ? Icons.expand_less : Icons.expand_more,
-                      size: 20,
-                      color: SelmsColors.textMuted,
-                    ),
+                    Icon(_expanded ? Icons.expand_less : Icons.expand_more, size: 20, color: SelmsColors.textMuted),
                   ],
                 ),
               ),
             ),
             if (_expanded) ...[
               const Divider(height: 1, color: SelmsColors.border),
-              // ---- body ----
               Padding(
                 padding: const EdgeInsets.all(20),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      flex: 5,
-                      child: _equipmentColumn(assigned, needed),
-                    ),
+                    Expanded(flex: 5, child: _equipmentColumn(assigned, needed)),
                     const SizedBox(width: 28),
                     Expanded(flex: 5, child: _detailsColumn()),
                   ],
                 ),
               ),
-              // ---- actions ----
-              if (_open) ...[
+              if (_open && (assigned < needed || _remote)) ...[
                 const Divider(height: 1, color: SelmsColors.border),
                 Container(
                   color: SelmsColors.fieldBg,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 12,
-                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                   child: Row(
                     children: [
-                      if (!_accepted)
-                        ElevatedButton.icon(
-                          onPressed: _accepting
-                              ? null
-                              : () async {
-                                  setState(() => _accepting = true);
-                                  await widget.onAccept();
-                                  if (mounted)
-                                    setState(() => _accepting = false);
-                                },
-                          icon: const Icon(Icons.check, size: 15),
-                          label: Text(
-                            _accepting ? 'Accepting…' : 'Accept request',
-                            style: const TextStyle(fontSize: 12.5),
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: SelmsColors.ink,
-                            foregroundColor: Colors.white,
-                            elevation: 0,
-                          ),
-                        ),
-                      if (!_accepted) const SizedBox(width: 10),
-                      if (!_fulfilled)
+                      if (assigned < needed)
                         OutlinedButton.icon(
                           onPressed: _goProducts,
-                          icon: const Icon(
-                            Icons.inventory_2_outlined,
-                            size: 15,
-                          ),
-                          label: const Text(
-                            'Assign equipment',
-                            style: TextStyle(fontSize: 12.5),
-                          ),
+                          icon: const Icon(Icons.inventory_2_outlined, size: 15),
+                          label: const Text('Assign equipment', style: TextStyle(fontSize: 12.5)),
                         ),
-                      if (_r['needs_shipping'] == true) ...[
+                      if (_remote) ...[
                         const SizedBox(width: 10),
                         OutlinedButton.icon(
                           onPressed: _goShipments,
-                          icon: const Icon(
-                            Icons.local_shipping_outlined,
-                            size: 15,
-                          ),
-                          label: Text(
-                            _r['shipment'] == null
-                                ? 'Ship via Pos'
-                                : 'View shipment',
-                            style: const TextStyle(fontSize: 12.5),
-                          ),
+                          icon: const Icon(Icons.local_shipping_outlined, size: 15),
+                          label: Text(_r['shipment'] == null ? 'Ship via Pos' : 'View shipment',
+                              style: const TextStyle(fontSize: 12.5)),
                         ),
                       ],
-                      const Spacer(),
-                      Flexible(
-                        child: Text(
-                          _fulfilled
-                              ? 'Complete — IT has assigned everything requested.'
-                              : 'Nothing is assigned for you. Items tick off as you assign them from Products.',
-                          textAlign: TextAlign.right,
-                          style: const TextStyle(
-                            fontSize: 11.5,
-                            color: SelmsColors.textMuted,
-                          ),
-                        ),
-                      ),
                     ],
                   ),
                 ),
@@ -537,13 +469,7 @@ class _RequestCardState extends State<_RequestCard> {
     );
   }
 
-  static const _initialsStyle = TextStyle(
-    fontSize: 13,
-    fontWeight: FontWeight.w600,
-    color: SelmsColors.ink,
-  );
-
-  // ---------- left: equipment ----------
+  // ---------- left: equipment + tasks ----------
 
   Widget _equipmentColumn(int assigned, int needed) {
     return Column(
@@ -552,10 +478,8 @@ class _RequestCardState extends State<_RequestCard> {
         _heading('EQUIPMENT TO PREPARE'),
         const SizedBox(height: 10),
         if (_items.isEmpty)
-          const Text(
-            'No equipment was requested for this hire.',
-            style: TextStyle(fontSize: 12.5, color: SelmsColors.textMuted),
-          )
+          const Text('No equipment was requested for this hire.',
+              style: TextStyle(fontSize: 12.5, color: SelmsColors.textMuted))
         else ...[
           ClipRRect(
             borderRadius: BorderRadius.circular(4),
@@ -564,10 +488,7 @@ class _RequestCardState extends State<_RequestCard> {
               minHeight: 5,
               backgroundColor: SelmsColors.border,
               valueColor: AlwaysStoppedAnimation(
-                _fulfilled
-                    ? SelmsColors.statusActiveText
-                    : const Color(0xFFF59E0B),
-              ),
+                  assigned == needed ? SelmsColors.statusActiveText : const Color(0xFFF59E0B)),
             ),
           ),
           const SizedBox(height: 10),
@@ -577,18 +498,7 @@ class _RequestCardState extends State<_RequestCard> {
           const SizedBox(height: 10),
           _heading('ALSO ASSIGNED'),
           const SizedBox(height: 6),
-          ..._extra.map(
-            (a) => Padding(
-              padding: const EdgeInsets.symmetric(vertical: 3),
-              child: Text(
-                '${a['name']}${(a['asset_tag'] as String?)?.isNotEmpty == true ? '  ·  ${a['asset_tag']}' : ''}',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: SelmsColors.textSecondary,
-                ),
-              ),
-            ),
-          ),
+          ..._extra.map(_extraRow),
         ],
       ],
     );
@@ -597,57 +507,63 @@ class _RequestCardState extends State<_RequestCard> {
   Widget _itemRow(Map<String, dynamic> item) {
     final done = item['assigned'] == true;
     final asset = (item['asset'] as Map?)?.cast<String, dynamic>();
-    final tag = (asset?['asset_tag'] as String?) ?? '';
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: done
-            ? SelmsColors.statusActiveBg.withValues(alpha: 0.5)
-            : SelmsColors.fieldBg,
+        color: done ? SelmsColors.statusActiveBg.withValues(alpha: 0.5) : SelmsColors.fieldBg,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: SelmsColors.border),
       ),
       child: Row(
         children: [
-          Icon(
-            done ? Icons.check_circle : Icons.radio_button_unchecked,
-            size: 18,
-            color: done ? SelmsColors.statusActiveText : SelmsColors.textMuted,
-          ),
+          if (done)
+            _AssetThumb(apiBaseUrl: widget.apiBaseUrl, photoUrl: asset?['photo_url'] as String?)
+          else
+            const SizedBox(
+              width: 44,
+              height: 44,
+              child: Icon(Icons.radio_button_unchecked, size: 18, color: SelmsColors.textMuted),
+            ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  item['type'] as String? ?? '',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: SelmsColors.textPrimary,
-                  ),
-                ),
-                Text(
-                  done
-                      ? '${asset?['name'] ?? ''}${tag.isNotEmpty ? '  ·  $tag' : ''}'
-                      : 'Not assigned yet',
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    color: done
-                        ? SelmsColors.textSecondary
-                        : SelmsColors.textMuted,
-                  ),
-                ),
+                Text(item['type'] as String? ?? '',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: SelmsColors.textPrimary)),
+                if (done) ...[
+                  Text(asset?['name'] as String? ?? '',
+                      style: const TextStyle(fontSize: 11.5, color: SelmsColors.textSecondary)),
+                  Text(_idText(asset ?? const {}), style: const TextStyle(fontSize: 11, color: SelmsColors.textMuted)),
+                ] else
+                  const Text('Not assigned yet', style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
               ],
             ),
+          ),
+          if (done) const Icon(Icons.check_circle, size: 18, color: SelmsColors.statusActiveText),
+        ],
+      ),
+    );
+  }
+
+  Widget _extraRow(Map<String, dynamic> a) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          _AssetThumb(apiBaseUrl: widget.apiBaseUrl, photoUrl: a['photo_url'] as String?, size: 32),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text('${a['name'] ?? a['type'] ?? 'Item'}  ·  ${_idText(a)}',
+                style: const TextStyle(fontSize: 12, color: SelmsColors.textSecondary)),
           ),
         ],
       ),
     );
   }
 
-  // ---------- right: employee + account ----------
+  // ---------- right: employee + account + delivery ----------
 
   Widget _detailsColumn() {
     final location = _emp['work_location_type'] as String? ?? '';
@@ -656,71 +572,35 @@ class _RequestCardState extends State<_RequestCard> {
       children: [
         _heading('EMPLOYEE'),
         const SizedBox(height: 6),
-        _fact(
-          'Start date',
-          (_emp['hire_date'] as String?)?.isNotEmpty == true
-              ? _emp['hire_date'] as String
-              : 'TBC',
-        ),
-        _fact('Work location', location.isEmpty ? '—' : location),
-        _fact(
-          'Line manager',
-          (_emp['line_manager'] as String?)?.isNotEmpty == true
-              ? _emp['line_manager'] as String
-              : '—',
-        ),
-        _fact(
-          'Personal email',
-          _emp['personal_email'] as String? ?? '—',
-          copy: true,
-        ),
-        _fact('Phone', _emp['mobile_number'] as String? ?? '—', copy: true),
+        _Fact('Start date', (_emp['hire_date'] as String?)?.isNotEmpty == true ? _emp['hire_date'] as String : 'TBC'),
+        _Fact('Work location', location.isEmpty ? '—' : location),
+        _Fact('Line manager',
+            (_emp['line_manager'] as String?)?.isNotEmpty == true ? _emp['line_manager'] as String : '—'),
+        _Fact('Personal email', _emp['personal_email'] as String? ?? '—', copy: true),
+        _Fact('Phone', _emp['mobile_number'] as String? ?? '—', copy: true),
         const SizedBox(height: 14),
         _heading('MICROSOFT ACCOUNT'),
         const SizedBox(height: 6),
         if (!_open)
-          const Text(
-            'Credentials are removed once a request is cancelled.',
-            style: TextStyle(fontSize: 12, color: SelmsColors.textMuted),
-          )
+          const Text('Credentials are removed once a request is cancelled.',
+              style: TextStyle(fontSize: 12, color: SelmsColors.textMuted))
         else ...[
-          _fact(
-            'Account email',
-            _account['email'] as String? ?? '—',
-            copy: true,
-          ),
-          _passwordRow(),
-          const SizedBox(height: 4),
-          const Text(
-            'One-time password for creating the account. Ask the employee to change it at first sign-in.',
-            style: TextStyle(
-              fontSize: 11,
-              color: SelmsColors.textMuted,
-              height: 1.35,
-            ),
-          ),
+          _Fact('Account email', _account['email'] as String? ?? '—', copy: true),
         ],
         const SizedBox(height: 14),
         _heading('DELIVERY'),
         const SizedBox(height: 6),
-        if (_r['needs_shipping'] != true)
+        if (!_remote)
           Row(
             children: [
-              const Icon(
-                Icons.business_outlined,
-                size: 15,
-                color: SelmsColors.textSecondary,
-              ),
+              const Icon(Icons.business_outlined, size: 15, color: SelmsColors.textSecondary),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   location.isEmpty
                       ? 'Collects equipment at the office.'
                       : '$location — collects equipment at the office. No posting needed.',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: SelmsColors.textSecondary,
-                  ),
+                  style: const TextStyle(fontSize: 12, color: SelmsColors.textSecondary),
                 ),
               ),
             ],
@@ -728,148 +608,42 @@ class _RequestCardState extends State<_RequestCard> {
         else ...[
           Row(
             children: [
-              const Icon(
-                Icons.local_shipping_outlined,
-                size: 15,
-                color: SelmsColors.textSecondary,
-              ),
+              const Icon(Icons.local_shipping_outlined, size: 15, color: SelmsColors.textSecondary),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   _r['shipment'] == null
                       ? '$location employee — equipment needs to be posted to:'
                       : 'Shipment ${_shipmentLabel((_r['shipment'] as Map)['status'] as String)} — posting to:',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: SelmsColors.textSecondary,
-                  ),
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: SelmsColors.textSecondary),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 4),
-          _fact('Address', _emp['address_line'] as String? ?? '—', copy: true),
-          _fact('Postcode', _emp['postcode'] as String? ?? '—', copy: true),
-          _fact('State', _emp['state'] as String? ?? '—', copy: true),
+          _Fact('Address', _emp['address_line'] as String? ?? '—', copy: true),
+          _Fact('Postcode', _emp['postcode'] as String? ?? '—', copy: true),
+          _Fact('State', _emp['state'] as String? ?? '—', copy: true),
         ],
       ],
     );
   }
 
   String _shipmentLabel(String s) => switch (s) {
-    'pending' => 'to prepare',
-    'order_created' => 'booked with Pos',
-    'dropped_off' => 'dropped at Pos',
-    'delivered' => 'delivered',
-    _ => s,
-  };
-
-  Widget _passwordRow() {
-    final pw = _account['initial_password'] as String?;
-    if (pw == null || pw.isEmpty) {
-      return _fact('Initial password', 'Not available');
-    }
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(
-        children: [
-          const SizedBox(
-            width: 108,
-            child: Text(
-              'Initial password',
-              style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted),
-            ),
-          ),
-          Expanded(
-            child: SelectableText(
-              _showPassword ? pw : '•' * pw.length,
-              style: const TextStyle(
-                fontSize: 12.5,
-                color: SelmsColors.textPrimary,
-                letterSpacing: 0.5,
-              ),
-            ),
-          ),
-          _iconBtn(
-            _showPassword
-                ? Icons.visibility_off_outlined
-                : Icons.visibility_outlined,
-            () => setState(() => _showPassword = !_showPassword),
-          ),
-          _iconBtn(Icons.copy, () => _copy('Password', pw)),
-        ],
-      ),
-    );
-  }
-
-  Widget _fact(String label, String value, {bool copy = false}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 108,
-            child: Text(
-              label,
-              style: const TextStyle(
-                fontSize: 11.5,
-                color: SelmsColors.textMuted,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Text(
-              value,
-              style: const TextStyle(
-                fontSize: 12.5,
-                color: SelmsColors.textPrimary,
-              ),
-            ),
-          ),
-          if (copy && value != '—')
-            _iconBtn(Icons.copy, () => _copy(label, value)),
-        ],
-      ),
-    );
-  }
-
-  Widget _iconBtn(IconData icon, VoidCallback onTap) => InkWell(
-    onTap: onTap,
-    borderRadius: BorderRadius.circular(6),
-    child: Padding(
-      padding: const EdgeInsets.all(4),
-      child: Icon(icon, size: 15, color: SelmsColors.textSecondary),
-    ),
-  );
-
-  Widget _heading(String t) => Text(
-    t,
-    style: const TextStyle(
-      fontSize: 10.5,
-      fontWeight: FontWeight.w600,
-      letterSpacing: 0.6,
-      color: SelmsColors.textMuted,
-    ),
-  );
-
-  Widget _chip(String text, Color bg, Color fg) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-    decoration: BoxDecoration(
-      color: bg,
-      borderRadius: BorderRadius.circular(20),
-    ),
-    child: Text(
-      text,
-      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg),
-    ),
-  );
+        'pending' => 'to prepare',
+        'order_created' => 'booked with Pos',
+        'dropped_off' => 'dropped at Pos',
+        'delivered' => 'delivered',
+        _ => s,
+      };
 }
 
+// ---------------------------------------------------------------------------
+// Offboarding: equipment to collect back from a leaver
+// ---------------------------------------------------------------------------
 
-/// What to collect back from someone being offboarded. Read live from the
-/// equipment records: an item counts as returned only once IT has really
-/// retrieved it (via the Products / Scan screens) - there is no tick box.
+/// Laid out like the onboarding card. An item counts as returned only once
+/// IT has really received it (Products / Scan) - there is no tick box.
 class _ReturnCard extends StatefulWidget {
   const _ReturnCard({
     super.key,
@@ -882,7 +656,8 @@ class _ReturnCard extends StatefulWidget {
   final Map<String, dynamic> data;
   final String apiBaseUrl;
   final String itToken;
-  /// Reloads the list after IT records an item (e.g. as lost).
+
+  /// Reloads the list after IT records something (e.g. an item as lost).
   final VoidCallback? onChanged;
 
   @override
@@ -890,12 +665,31 @@ class _ReturnCard extends StatefulWidget {
 }
 
 class _ReturnCardState extends State<_ReturnCard> {
-  late bool _expanded = widget.data['fulfilled'] != true;
+  bool _expanded = false;
+  bool _confirming = false;
 
   Map<String, dynamic> get _d => widget.data;
   Map<String, dynamic> get _emp => (_d['employee'] as Map).cast<String, dynamic>();
   List<Map<String, dynamic>> get _items => (_d['items'] as List).cast<Map<String, dynamic>>();
+  Map<String, dynamic>? get _parcel => (_d['shipment'] as Map?)?.cast<String, dynamic>();
   bool get _fulfilled => _d['fulfilled'] == true;
+  bool get _byPost => _d['by_post'] == true;
+
+  /// Nothing on record for this leaver: IT confirms that, so it counts as done.
+  Future<void> _confirmNothing() async {
+    setState(() => _confirming = true);
+    try {
+      await ApiClient(baseUrl: widget.apiBaseUrl, hrToken: widget.itToken)
+          .confirmNothingToCollect(_d['message_id'] as String);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Confirmed - nothing to collect.')));
+      widget.onChanged?.call();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      if (mounted) setState(() => _confirming = false);
+    }
+  }
 
   /// Closes an item off as lost (it won't come back), so offboarding can finish.
   Future<void> _markLost(Map<String, dynamic> it, Map<String, dynamic>? prep) async {
@@ -949,12 +743,11 @@ class _ReturnCardState extends State<_ReturnCard> {
     return 'Employee: ${parts.join(' · ')}';
   }
 
-  String _initials(String name) {
-    final parts = name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
-    if (parts.isEmpty) return '?';
-    if (parts.length == 1) return parts.first[0].toUpperCase();
-    return (parts.first[0] + parts.last[0]).toUpperCase();
-  }
+  Widget _badge(String text, Color bg, Color fg) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(10)),
+        child: Text(text, style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: fg)),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -962,7 +755,7 @@ class _ReturnCardState extends State<_ReturnCard> {
     final returned = (_d['returned_count'] as num).toInt();
     final total = (_d['total_count'] as num).toInt();
     final lastDay = _d['last_working_day'] as String?;
-    final photo = _emp['profile_image_url'] as String?;
+    final fromEmployee = _parcel?['from_employee'] == true && !_fulfilled;
 
     return Container(
       decoration: BoxDecoration(
@@ -982,23 +775,11 @@ class _ReturnCardState extends State<_ReturnCard> {
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 14),
               child: Row(
                 children: [
-                  Container(
-                    width: 42,
-                    height: 42,
-                    clipBehavior: Clip.hardEdge,
-                    decoration: const BoxDecoration(color: SelmsColors.accentBg, shape: BoxShape.circle),
-                    alignment: Alignment.center,
-                    child: (photo != null && photo.isNotEmpty)
-                        ? Image.network('${widget.apiBaseUrl}$photo',
-                            fit: BoxFit.cover,
-                            width: 42,
-                            height: 42,
-                            errorBuilder: (_, _, _) => Text(_initials(name),
-                                style: const TextStyle(
-                                    fontSize: 13, fontWeight: FontWeight.w600, color: SelmsColors.ink)))
-                        : Text(_initials(name),
-                            style: const TextStyle(
-                                fontSize: 13, fontWeight: FontWeight.w600, color: SelmsColors.ink)),
+                  EmployeeAvatar(
+                    apiBaseUrl: widget.apiBaseUrl,
+                    name: name,
+                    photoUrl: _emp['profile_image_url'] as String?,
+                    size: 42,
                   ),
                   const SizedBox(width: 14),
                   Expanded(
@@ -1011,73 +792,34 @@ class _ReturnCardState extends State<_ReturnCard> {
                               child: Text(name,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
-                                      fontSize: 14.5, fontWeight: FontWeight.w600, color: SelmsColors.textPrimary)),
+                                      fontSize: 15, fontWeight: FontWeight.w600, color: SelmsColors.textPrimary)),
                             ),
                             const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFAECE7),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: const Text('Equipment return',
-                                  style: TextStyle(
-                                      fontSize: 10.5, fontWeight: FontWeight.w600, color: Color(0xFF993C1D))),
-                            ),
-                            if (!_fulfilled && _d['posted_at'] != null) ...[
+                            _badge('Equipment return', const Color(0xFFFAECE7), const Color(0xFF993C1D)),
+                            if (fromEmployee) ...[
                               const SizedBox(width: 6),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: SelmsColors.accentBg,
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: const Text('Posted by employee',
-                                    style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: SelmsColors.ink)),
-                              ),
-                            ],
-                            if (!_fulfilled && _d['ready_at'] != null) ...[
+                              _badge('Parcel to review', SelmsColors.accentBg, SelmsColors.ink),
+                            ] else if (!_fulfilled && _d['ready_at'] != null) ...[
                               const SizedBox(width: 6),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: SelmsColors.statusActiveBg,
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: const Text('Ready to return',
-                                    style: TextStyle(
-                                        fontSize: 10.5, fontWeight: FontWeight.w600, color: SelmsColors.statusActiveText)),
-                              ),
+                              _badge('Ready to return', SelmsColors.statusActiveBg, SelmsColors.statusActiveText),
                             ],
                           ],
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          '${_emp['employee_id'] ?? ''} · ${_emp['department'] ?? ''}'
-                          '${lastDay != null && lastDay.isNotEmpty ? ' · Last working day $lastDay' : ''}',
+                          '${_emp['employee_id'] ?? ''}  ·  ${_emp['job_title'] ?? ''}  ·  ${_emp['department'] ?? ''}',
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 11.5, color: SelmsColors.textMuted),
+                          style: const TextStyle(fontSize: 12, color: SelmsColors.textMuted),
                         ),
                       ],
                     ),
                   ),
+                  if (_fulfilled)
+                    _chip(total == 0 ? 'Nothing to collect' : 'Done', SelmsColors.statusActiveBg, SelmsColors.statusActiveText)
+                  else
+                    _chip(total == 0 ? 'To confirm' : '$returned of $total received', SelmsColors.statusOnboardingBg,
+                        SelmsColors.statusOnboardingText),
                   const SizedBox(width: 10),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: _fulfilled ? SelmsColors.statusActiveBg : SelmsColors.accentBg,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      _fulfilled ? 'All returned' : '$returned of $total returned',
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w600,
-                        color: _fulfilled ? SelmsColors.statusActiveText : SelmsColors.ink,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
                   Icon(_expanded ? Icons.expand_less : Icons.expand_more, size: 20, color: SelmsColors.textMuted),
                 ],
               ),
@@ -1086,99 +828,225 @@ class _ReturnCardState extends State<_ReturnCard> {
           if (_expanded) ...[
             const Divider(height: 1, color: SelmsColors.border),
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 14, 20, 16),
-              child: Column(
+              padding: const EdgeInsets.all(20),
+              child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (_items.isEmpty)
-                    const Text('No equipment is assigned to this person — nothing to collect.',
-                        style: TextStyle(fontSize: 12.5, color: SelmsColors.textSecondary))
-                  else
-                    ..._items.map((it) {
-                      final done = it['returned'] == true;
-                      final tag = (it['asset_tag'] as String?) ?? '';
-                      final prep = (it['prep'] as Map?)?.cast<String, dynamic>();
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                          children: [
-                            Icon(done ? Icons.check_circle : Icons.hourglass_top,
-                                size: 16,
-                                color: done ? SelmsColors.statusActiveText : SelmsColors.textMuted),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                '${it['name'] ?? it['type'] ?? 'Item'}'
-                                '${it['type'] != null && it['name'] != null ? ' · ${it['type']}' : ''}'
-                                '${tag.isNotEmpty ? ' · $tag' : ''}',
-                                style: TextStyle(
-                                  fontSize: 12.5,
-                                  color: done ? SelmsColors.textMuted : SelmsColors.textPrimary,
-                                  decoration: done ? TextDecoration.lineThrough : null,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                            // Not coming back: IT can close it off as lost.
-                            if (!done)
-                              Padding(
-                                padding: const EdgeInsets.only(left: 26, top: 2),
-                                child: TextButton(
-                                  onPressed: () => _markLost(it, prep),
-                                  style: TextButton.styleFrom(
-                                      padding: EdgeInsets.zero,
-                                      minimumSize: const Size(0, 0),
-                                      visualDensity: VisualDensity.compact),
-                                  child: Text(prep?['condition'] == 'Lost' ? 'Employee reported it lost — mark as lost' : 'Mark as lost',
-                                      style: const TextStyle(fontSize: 11, color: SelmsColors.rose)),
-                                ),
-                              ),
-                            // What the employee said before handing it back.
-                            if (!done && prep != null)
-                              Padding(
-                                padding: const EdgeInsets.only(left: 26, top: 2),
-                                child: Text(_prepText(prep),
-                                    style: TextStyle(
-                                        fontSize: 11,
-                                        color: prep['condition'] == 'Good'
-                                            ? SelmsColors.textSecondary
-                                            : const Color(0xFF993C1D))),
-                              ),
-                          ],
-                        ),
-                      );
-                    }),
-                  const SizedBox(height: 10),
-                  const Text(
-                    'Retrieve each item from Products (or scan its QR). It is marked returned here '
-                    'automatically; the exit interview is booked once everything is back.',
-                    style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted, height: 1.4),
-                  ),
-                  if (!_fulfilled) ...[
-                    const SizedBox(height: 10),
-                    OutlinedButton.icon(
-                      onPressed: () => Navigator.of(context).pushReplacement(
-                        MaterialPageRoute(
-                          builder: (_) => ItProductsScreen(
-                            apiBaseUrl: widget.apiBaseUrl,
-                            itToken: widget.itToken,
-                          ),
-                        ),
-                      ),
-                      icon: const Icon(Icons.inventory_2_outlined, size: 15),
-                      label: const Text('Open Products', style: TextStyle(fontSize: 12)),
-                    ),
-                  ],
+                  Expanded(flex: 5, child: _equipmentColumn(returned, total)),
+                  const SizedBox(width: 28),
+                  Expanded(flex: 5, child: _detailsColumn(lastDay)),
                 ],
               ),
             ),
+            if (!_fulfilled && total > 0) ...[
+              const Divider(height: 1, color: SelmsColors.border),
+              Container(
+                color: SelmsColors.fieldBg,
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                child: Row(
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: () => Navigator.of(context).pushReplacement(MaterialPageRoute(
+                        builder: (_) => ItProductsScreen(apiBaseUrl: widget.apiBaseUrl, itToken: widget.itToken),
+                      )),
+                      icon: const Icon(Icons.inventory_2_outlined, size: 15),
+                      label: const Text('Receive in Products', style: TextStyle(fontSize: 12.5)),
+                    ),
+                    if (_byPost) ...[
+                      const SizedBox(width: 10),
+                      OutlinedButton.icon(
+                        onPressed: () => Navigator.of(context).pushReplacement(MaterialPageRoute(
+                          builder: (_) => ItShipmentsScreen(
+                              apiBaseUrl: widget.apiBaseUrl, itToken: widget.itToken, initialDirection: 'return'),
+                        )),
+                        icon: const Icon(Icons.local_shipping_outlined, size: 15),
+                        label: Text(_parcel == null ? 'Return shipments' : 'Review the parcel',
+                            style: const TextStyle(fontSize: 12.5)),
+                      ),
+                    ],
+                    const Spacer(),
+                    const Flexible(
+                      child: Text(
+                        'Done by itself once every item is received.',
+                        textAlign: TextAlign.right,
+                        style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ],
         ],
       ),
+    );
+  }
+
+  // ---------- left: equipment + tasks ----------
+
+  Widget _equipmentColumn(int returned, int total) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _heading('EQUIPMENT TO COLLECT'),
+        const SizedBox(height: 10),
+        if (_items.isEmpty && _fulfilled)
+          Text('Confirmed by ${_d['nothing_to_collect_by'] ?? 'IT'}: no company equipment to collect.',
+              style: const TextStyle(fontSize: 12.5, color: SelmsColors.textSecondary))
+        else if (_items.isEmpty) ...[
+          const Text(
+              'No equipment is on record for this person. Check they really have nothing '
+              '(laptop, phone, badge, accessories), then confirm - until then it is not counted as returned.',
+              style: TextStyle(fontSize: 12.5, color: SelmsColors.textSecondary, height: 1.4)),
+          const SizedBox(height: 10),
+          ElevatedButton.icon(
+            onPressed: _confirming ? null : _confirmNothing,
+            icon: const Icon(Icons.check, size: 15),
+            label: Text(_confirming ? 'Confirming…' : 'Confirm nothing to collect', style: const TextStyle(fontSize: 12)),
+          ),
+        ] else ...[
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: total == 0 ? 1 : returned / total,
+              minHeight: 5,
+              backgroundColor: SelmsColors.border,
+              valueColor:
+                  AlwaysStoppedAnimation(returned == total ? SelmsColors.statusActiveText : const Color(0xFFF59E0B)),
+            ),
+          ),
+          const SizedBox(height: 10),
+          ..._items.map(_itemRow),
+        ],
+      ],
+    );
+  }
+
+  Widget _itemRow(Map<String, dynamic> it) {
+    final done = it['returned'] == true;
+    final prep = (it['prep'] as Map?)?.cast<String, dynamic>();
+    final outcome = switch (it['outcome']) {
+      'lost' => 'Recorded lost',
+      'damaged' => 'Received · damaged',
+      _ => 'Received',
+    };
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: done ? SelmsColors.statusActiveBg.withValues(alpha: 0.5) : SelmsColors.fieldBg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: SelmsColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              _AssetThumb(apiBaseUrl: widget.apiBaseUrl, photoUrl: it['photo_url'] as String?),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('${it['name'] ?? it['type'] ?? 'Item'}',
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: SelmsColors.textPrimary)),
+                    Text('${it['type'] ?? ''}${it['type'] != null ? '  ·  ' : ''}${_idText(it)}',
+                        style: const TextStyle(fontSize: 11, color: SelmsColors.textMuted)),
+                  ],
+                ),
+              ),
+              done
+                  ? Text(outcome,
+                      style: const TextStyle(
+                          fontSize: 11, fontWeight: FontWeight.w600, color: SelmsColors.statusActiveText))
+                  : const Text('With employee', style: TextStyle(fontSize: 11, color: SelmsColors.textMuted)),
+            ],
+          ),
+          // What the employee said before handing it back.
+          if (!done && prep != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 54, top: 4),
+              child: Text(_prepText(prep),
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: prep['condition'] == 'Good' ? SelmsColors.textSecondary : const Color(0xFF993C1D))),
+            ),
+          // Not coming back: IT can close it off as lost.
+          if (!done)
+            Padding(
+              padding: const EdgeInsets.only(left: 54, top: 2),
+              child: TextButton(
+                onPressed: () => _markLost(it, prep),
+                style: TextButton.styleFrom(
+                    padding: EdgeInsets.zero, minimumSize: const Size(0, 0), visualDensity: VisualDensity.compact),
+                child: Text(prep?['condition'] == 'Lost' ? 'Employee reported it lost — mark as lost' : 'Mark as lost',
+                    style: const TextStyle(fontSize: 11, color: SelmsColors.rose)),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // ---------- right: employee + how it comes back ----------
+
+  Widget _detailsColumn(String? lastDay) {
+    final location = _emp['work_location_type'] as String? ?? '';
+    final ref = _parcel?['pos_reference'] as String? ?? '';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _heading('EMPLOYEE'),
+        const SizedBox(height: 6),
+        _Fact('Last working day', (lastDay ?? '').isEmpty ? '—' : lastDay!),
+        _Fact('Departure', (_d['departure_type'] as String? ?? '').isEmpty ? '—' : _d['departure_type'] as String),
+        _Fact('Work location', location.isEmpty ? '—' : location),
+        _Fact('Personal email', _emp['personal_email'] as String? ?? '—', copy: true),
+        _Fact('Phone', _emp['mobile_number'] as String? ?? '—', copy: true),
+        const SizedBox(height: 14),
+        _heading('RETURN'),
+        const SizedBox(height: 6),
+        if (!_byPost)
+          Row(
+            children: [
+              const Icon(Icons.business_outlined, size: 15, color: SelmsColors.textSecondary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('Brings the items to ${_d['location'] ?? 'the IT department'}.',
+                    style: const TextStyle(fontSize: 12, color: SelmsColors.textSecondary)),
+              ),
+            ],
+          )
+        else ...[
+          Row(
+            children: [
+              const Icon(Icons.local_shipping_outlined, size: 15, color: SelmsColors.textSecondary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _parcel == null
+                      ? 'Remote — the employee books the Pos parcel to the company and sends you the tracking number.'
+                      : _parcel!['from_employee'] == true
+                          ? 'Remote — the employee posted it and sent this tracking number to review:'
+                          : 'Remote — returned by Pos Malaysia:',
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: SelmsColors.textSecondary),
+                ),
+              ),
+            ],
+          ),
+          if (ref.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            _Fact('Tracking number', ref, copy: true),
+            _Fact('Parcel status', switch (_parcel?['status']) {
+              'delivered' => 'Received',
+              'dropped_off' => 'On its way',
+              'order_created' => 'Booked',
+              _ => 'Pending',
+            }),
+          ],
+        ],
+      ],
     );
   }
 }

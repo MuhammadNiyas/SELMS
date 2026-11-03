@@ -10,15 +10,17 @@ import '../services/api_client.dart';
 import '../theme/selms_colors.dart';
 import 'app_shell.dart' show SelmsSession;
 import 'chat_panel.dart';
+import 'tab_badges.dart';
 import '../screens/selms_login_screen.dart';
 import '../screens/it_dashboard_screen.dart';
 import '../screens/it_products_screen.dart';
 import '../screens/it_scan_screen.dart';
 import '../screens/it_messages_screen.dart';
+import '../screens/it_requests_screen.dart';
 import '../screens/it_shipments_screen.dart';
 import '../screens/it_schedule_screen.dart';
 
-enum ItRoute { dashboard, products, scan, shipments, schedule, messages }
+enum ItRoute { dashboard, products, scan, shipments, schedule, requests, messages }
 
 class ItAppShell extends StatefulWidget {
   const ItAppShell({
@@ -41,6 +43,29 @@ class ItAppShell extends StatefulWidget {
 class _ItAppShellState extends State<ItAppShell> {
   bool _collapsed = false;
   bool _chatOpen = false;
+
+  // Red counts on Messages / Shipments; opening one of them clears its own.
+  late final TabBadgePoller _badges = TabBadgePoller(
+    ApiClient(baseUrl: widget.apiBaseUrl, hrToken: widget.itToken),
+    openTypes: switch (widget.activeRoute) {
+      ItRoute.requests => itRequestsTypes,
+      ItRoute.messages => itMessagesTypes,
+      ItRoute.shipments => itShipmentsTypes,
+      _ => const <String>[],
+    },
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _badges.start();
+  }
+
+  @override
+  void dispose() {
+    _badges.stop();
+    super.dispose();
+  }
 
   /// IT's assistant: finds and shares company documents (policies, forms).
   void _openChat() {
@@ -234,6 +259,7 @@ class _ItSidebar extends StatelessWidget {
           _ItNavItem(
             icon: Icons.local_shipping_outlined,
             label: 'Shipments',
+            badge: const TabBadge(types: itShipmentsTypes),
             active: activeRoute == ItRoute.shipments,
             onTap: () {
               if (activeRoute == ItRoute.shipments) return;
@@ -258,8 +284,23 @@ class _ItSidebar extends StatelessWidget {
             },
           ),
           _ItNavItem(
+            icon: Icons.assignment_outlined,
+            label: 'Requests',
+            badge: const TabBadge(types: itRequestsTypes),
+            active: activeRoute == ItRoute.requests,
+            onTap: () {
+              if (activeRoute == ItRoute.requests) return;
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(
+                  builder: (_) => ItRequestsScreen(apiBaseUrl: apiBaseUrl, itToken: itToken),
+                ),
+              );
+            },
+          ),
+          _ItNavItem(
             icon: Icons.chat_bubble_outline,
             label: 'Messages',
+            badge: const TabBadge(types: itMessagesTypes),
             active: activeRoute == ItRoute.messages,
             onTap: () {
               if (activeRoute == ItRoute.messages) return;
@@ -289,12 +330,15 @@ class _ItSidebar extends StatelessWidget {
 }
 
 class _ItNavItem extends StatelessWidget {
-  const _ItNavItem({required this.icon, required this.label, required this.active, required this.onTap});
+  const _ItNavItem({required this.icon, required this.label, required this.active, required this.onTap, this.badge});
 
   final IconData icon;
   final String label;
   final bool active;
   final VoidCallback onTap;
+
+  /// Red unread count, at the end of the row.
+  final Widget? badge;
 
   @override
   Widget build(BuildContext context) {
@@ -312,12 +356,15 @@ class _ItNavItem extends StatelessWidget {
           children: [
             Icon(icon, size: 18, color: active ? SelmsColors.ink : SelmsColors.sidebarIconInactive),
             const SizedBox(width: 10),
-            Text(label,
-                style: TextStyle(
-                  fontSize: 13.5,
-                  color: active ? SelmsColors.ink : SelmsColors.sidebarInactive,
-                  fontWeight: active ? FontWeight.w500 : FontWeight.w400,
-                )),
+            Expanded(
+              child: Text(label,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    color: active ? SelmsColors.ink : SelmsColors.sidebarInactive,
+                    fontWeight: active ? FontWeight.w500 : FontWeight.w400,
+                  )),
+            ),
+            ?badge,
           ],
         ),
       ),
