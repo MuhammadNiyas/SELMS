@@ -452,7 +452,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     return _card(
       title: 'Lifecycle progress',
-      subtitle: 'Everyone onboarding or offboarding right now — most urgent first',
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -471,8 +470,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   Icon(Icons.inbox_outlined, size: 30, color: SelmsColors.textMuted),
                   SizedBox(height: 8),
                   Text('No one is in progress here.', style: TextStyle(fontSize: 12.5, color: SelmsColors.textMuted)),
-                  Text('Start onboarding or offboarding from their tabs and progress shows up here.',
-                      style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
                 ],
               ),
             )

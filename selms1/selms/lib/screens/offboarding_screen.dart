@@ -709,6 +709,7 @@ class _OffboardingScreenState extends State<OffboardingScreen> {
       builder: (_) => SchedulingDialog(
         apiBaseUrl: widget.apiBaseUrl,
         hrToken: widget.hrToken,
+        showLinkField: false,
         sessionType: 'exit_interview',
         title: 'Exit Interview',
         employeeId: _selectedEmployee?['employee_id'] as String?,
@@ -832,6 +833,7 @@ class _OffboardingScreenState extends State<OffboardingScreen> {
       builder: (_) => SchedulingDialog(
         apiBaseUrl: widget.apiBaseUrl,
         hrToken: widget.hrToken,
+        showLinkField: false,
         // Only the locked step books the real exit interview; a meeting added with "+"
         // is an extra and must never count as it.
         sessionType: node.locked ? 'exit_interview' : 'other',
@@ -1580,7 +1582,6 @@ class _EmailStepDialogState extends State<_EmailStepDialog> {
   bool _regenerating = false;
   bool _sending = false;
   bool _alreadySent = false;
-  bool _started = false;
   String? _error;
 
   @override
@@ -1589,7 +1590,6 @@ class _EmailStepDialogState extends State<_EmailStepDialog> {
     if (widget.initialSubject != null && widget.initialBody != null) {
       _subjectCtrl.text = widget.initialSubject!;
       _bodyCtrl.text = widget.initialBody!;
-      _started = true; // opened by the Start button
       _loadingDraft = false;
     } else {
       _loadDraft();
@@ -1620,7 +1620,6 @@ class _EmailStepDialogState extends State<_EmailStepDialog> {
         _subjectCtrl.text = (draft['subject'] as String?) ?? '';
         _bodyCtrl.text = (draft['body'] as String?) ?? '';
         _alreadySent = draft['sent'] == true;
-        _started = draft['started'] == true;
       });
     } catch (e) {
       if (!mounted) return;
@@ -1633,16 +1632,6 @@ class _EmailStepDialogState extends State<_EmailStepDialog> {
         });
       }
     }
-  }
-
-  String _caption() {
-    if (_alreadySent) return 'This email was already sent.';
-    if (!_started) return 'Review and edit, then Save. It is sent when you click Start offboarding.';
-    final at = whenDateTime(widget.when);
-    if (at != null && at.isAfter(DateTime.now())) {
-      return 'Review and edit, then Save. SELMS sends it on ${whenAtText(widget.when)}.';
-    }
-    return 'Review and edit, then Save. The flow sends it as soon as this step runs.';
   }
 
   Future<void> _save() async {
@@ -1695,8 +1684,10 @@ class _EmailStepDialogState extends State<_EmailStepDialog> {
                   ),
                 ],
               ),
-              const SizedBox(height: 4),
-              Text(_caption(), style: const TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
+              if (_alreadySent) ...[
+                const SizedBox(height: 4),
+                const Text('This email was already sent.', style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
+              ],
               if (widget.banner != null) ...[
                 const SizedBox(height: 10),
                 Container(

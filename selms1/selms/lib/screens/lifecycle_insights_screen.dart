@@ -52,6 +52,10 @@ class _LifecycleInsightsScreenState extends State<LifecycleInsightsScreen> {
   String? _statusFilter; // null = any status
   bool _showCompleted = false; // finished ones leave the list unless asked for
   String? _expandedKey;
+  final _filterButtonKey = GlobalKey();
+
+  int get _activeFilterCount =>
+      (_processFilter != 'all' ? 1 : 0) + (_statusFilter != null ? 1 : 0) + (_showCompleted ? 1 : 0);
 
   static const double _tableMinWidth = 1020;
 
@@ -225,7 +229,7 @@ class _LifecycleInsightsScreenState extends State<LifecycleInsightsScreen> {
                 ? _emptyState(
                     Icons.groups_outlined,
                     'No one is onboarding or offboarding right now',
-                    'Start onboarding from the Onboarding tab, or initiate offboarding from an employee profile.',
+                    '',
                   )
                 : rows.isEmpty
                     ? _emptyState(Icons.search_off, 'No matches', 'Try a different search or clear the filters.')
@@ -307,87 +311,204 @@ class _LifecycleInsightsScreenState extends State<LifecycleInsightsScreen> {
 
   // ---------- Filters ----------
 
-  Widget _filterBar() {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(3),
-          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10)),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _segment('All', 'all'),
-              _segment('Onboarding', 'onboarding'),
-              _segment('Offboarding', 'offboarding'),
-            ],
-          ),
-        ),
-        const SizedBox(width: 12),
-        if (_statusFilter != null)
-          InputChip(
-            label: Text(_statusLabel(_statusFilter!), style: const TextStyle(fontSize: 11.5)),
-            onDeleted: () => setState(() => _statusFilter = null),
-            backgroundColor: Colors.white,
-            side: const BorderSide(color: SelmsColors.border),
-          ),
-        const SizedBox(width: 12),
-        FilterChip(
-          label: Text('Show completed (${_records.where((r) => r['status'] == 'completed').length})',
-              style: const TextStyle(fontSize: 11.5)),
-          selected: _showCompleted,
-          onSelected: (v) => setState(() => _showCompleted = v),
-          backgroundColor: Colors.white,
-          selectedColor: SelmsColors.accentBg,
-          checkmarkColor: SelmsColors.ink,
-          side: const BorderSide(color: SelmsColors.border),
-        ),
-        const Spacer(),
-        Container(
-          width: 280,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10)),
-          child: Row(
-            children: [
-              const Icon(Icons.search, size: 16, color: SelmsColors.textMuted),
-              const SizedBox(width: 8),
-              Expanded(
-                child: TextField(
-                  controller: _searchCtrl,
-                  onChanged: (_) => setState(() {}),
-                  style: const TextStyle(fontSize: 13),
-                  decoration: const InputDecoration(
-                    hintText: 'Search name, ID or department',
-                    hintStyle: TextStyle(fontSize: 12.5, color: SelmsColors.textMuted),
-                    border: InputBorder.none,
-                    isDense: true,
-                    contentPadding: EdgeInsets.symmetric(vertical: 11),
-                  ),
+  /// Same filter panel as the Employees page: pick, then Apply.
+  void _openFilterPanel() async {
+    final renderBox = _filterButtonKey.currentContext!.findRenderObject() as RenderBox;
+    final offset = renderBox.localToGlobal(Offset.zero);
+    final size = renderBox.size;
+
+    String? process = _processFilter == 'all' ? null : _processFilter;
+    String? status = _statusFilter;
+    bool completed = _showCompleted;
+    final completedCount = _records.where((r) => r['status'] == 'completed').length;
+
+    await showMenu<void>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        offset.dx,
+        offset.dy + size.height + 6,
+        offset.dx + 260,
+        offset.dy + size.height + 6,
+      ),
+      color: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      items: [
+        PopupMenuItem<void>(
+          enabled: false,
+          padding: EdgeInsets.zero,
+          child: StatefulBuilder(
+            builder: (context, setMenuState) {
+              return Container(
+                width: 230,
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _filterDropdown('Process', 'All processes', process,
+                        const {'onboarding': 'Onboarding', 'offboarding': 'Offboarding'},
+                        (v) => setMenuState(() => process = v)),
+                    const SizedBox(height: 12),
+                    _filterDropdown('Status', 'All statuses', status,
+                        const {'on_track': 'On track', 'at_risk': 'At risk', 'delayed': 'Delayed', 'completed': 'Completed'},
+                        (v) => setMenuState(() => status = v)),
+                    const SizedBox(height: 8),
+                    InkWell(
+                      onTap: () => setMenuState(() => completed = !completed),
+                      child: Row(
+                        children: [
+                          Checkbox(
+                            value: completed,
+                            visualDensity: VisualDensity.compact,
+                            onChanged: (v) => setMenuState(() => completed = v == true),
+                          ),
+                          Expanded(
+                            child: Text('Show completed ($completedCount)',
+                                style: const TextStyle(fontSize: 12.5, color: SelmsColors.textPrimary)),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => setMenuState(() {
+                              process = null;
+                              status = null;
+                              completed = false;
+                            }),
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(color: SelmsColors.border),
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                            ),
+                            child: const Text('Clear', style: TextStyle(fontSize: 12)),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: () {
+                              setState(() {
+                                _processFilter = process ?? 'all';
+                                _statusFilter = status;
+                                _showCompleted = completed;
+                              });
+                              Navigator.of(context).pop();
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: SelmsColors.ink,
+                              foregroundColor: Colors.white,
+                              elevation: 0,
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                            ),
+                            child: const Text('Apply', style: TextStyle(fontSize: 12)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-              ),
-            ],
+              );
+            },
           ),
         ),
       ],
     );
   }
 
-  Widget _segment(String label, String value) {
-    final active = _processFilter == value;
-    return InkWell(
-      onTap: () => setState(() => _processFilter = value),
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-        decoration: BoxDecoration(
-          color: active ? SelmsColors.ink : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
+  Widget _filterDropdown(
+      String label, String allLabel, String? value, Map<String, String> options, ValueChanged<String?> onChanged) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label.toUpperCase(),
+            style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w500, color: Colors.black45)),
+        const SizedBox(height: 6),
+        DropdownButtonFormField<String>(
+          initialValue: value,
+          isExpanded: true,
+          hint: Text(allLabel, style: const TextStyle(fontSize: 12.5)),
+          items: options.entries
+              .map((o) => DropdownMenuItem(value: o.key, child: Text(o.value, style: const TextStyle(fontSize: 12.5))))
+              .toList(),
+          onChanged: onChanged,
+          decoration: InputDecoration(
+            isDense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: SelmsColors.border),
+            ),
+          ),
         ),
-        child: Text(label,
-            style: TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w500,
-                color: active ? Colors.white : SelmsColors.textSecondary)),
-      ),
+      ],
+    );
+  }
+
+  /// Search on the left, filter button next to it - like the Employees page.
+  Widget _filterBar() {
+    return Row(
+      children: [
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            constraints: const BoxConstraints(maxWidth: 420),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8)),
+            child: Row(
+              children: [
+                const Padding(
+                  padding: EdgeInsets.only(left: 2),
+                  child: Icon(Icons.search, size: 15, color: SelmsColors.textMuted),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: TextField(
+                    controller: _searchCtrl,
+                    onChanged: (_) => setState(() {}),
+                    decoration: const InputDecoration(
+                      border: InputBorder.none,
+                      isDense: true,
+                      hintText: 'Search name, ID or department',
+                      hintStyle: TextStyle(fontSize: 12.5, color: SelmsColors.textMuted),
+                    ),
+                    style: const TextStyle(fontSize: 12.5),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        InkWell(
+          key: _filterButtonKey,
+          onTap: _openFilterPanel,
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            padding: const EdgeInsets.all(9),
+            decoration: BoxDecoration(color: SelmsColors.ink, borderRadius: BorderRadius.circular(8)),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                const Icon(Icons.filter_list, size: 15, color: Colors.white),
+                if (_activeFilterCount > 0)
+                  Positioned(
+                    right: -6,
+                    top: -6,
+                    child: Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: const BoxDecoration(color: SelmsColors.rose, shape: BoxShape.circle),
+                      child: Text('$_activeFilterCount',
+                          style: const TextStyle(fontSize: 8, color: Colors.white, fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const Spacer(),
+      ],
     );
   }
 

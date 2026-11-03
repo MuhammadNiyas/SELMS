@@ -204,10 +204,6 @@ class _DocumentsEditorState extends State<_DocumentsEditor> {
             children: [
               const Text('Documents for the employee',
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: SelmsColors.textPrimary)),
-              const SizedBox(height: 4),
-              const Text(
-                  'These appear in the employee\'s Documents tab when this step runs. Only HR and that employee can open them.',
-                  style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
               const SizedBox(height: 12),
               Flexible(
                 child: SingleChildScrollView(
@@ -396,9 +392,6 @@ class _SurveyEditorState extends State<_SurveyEditor> {
             children: [
               const Text('Survey',
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: SelmsColors.textPrimary)),
-              const SizedBox(height: 4),
-              const Text('The employee answers in their Documents tab. You see the answers in Lifecycle Insights.',
-                  style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
               const SizedBox(height: 12),
               TextField(
                 controller: _title,
@@ -615,7 +608,7 @@ class _WhenDialogState extends State<_WhenDialog> {
         'meeting' =>
           'Pick the day and time for the session (10 AM - 5 PM, Mon - Fri). If it clashes with another session you will be asked to pick another. Immediately = the first free slot from now.',
         'reminder' => 'HR is reminded at this day and time. You can still send it earlier.',
-        _ => 'SELMS waits until this day and time, then does it (within a few minutes).',
+        _ => '',
       };
 
   Future<void> _pickDate() async {
@@ -665,7 +658,7 @@ class _WhenDialogState extends State<_WhenDialog> {
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(color: SelmsColors.fieldBg, borderRadius: BorderRadius.circular(10)),
         child: const Text(
-            'Default template - applies to every new employee. Pick an employee at the top of the page to time this step for one person and see their hire date.',
+            'No employee chosen yet.',
             style: TextStyle(fontSize: 11.5, color: SelmsColors.textSecondary, height: 1.4)),
       );
     }
@@ -758,7 +751,8 @@ class _WhenDialogState extends State<_WhenDialog> {
               const SizedBox(height: 10),
               _employeeCard(),
               const SizedBox(height: 10),
-              Text(_explain, style: const TextStyle(fontSize: 11.5, color: SelmsColors.textMuted, height: 1.4)),
+              if (_explain.isNotEmpty)
+                Text(_explain, style: const TextStyle(fontSize: 11.5, color: SelmsColors.textMuted, height: 1.4)),
               const SizedBox(height: 12),
               _option('now', 'Immediately',
                   extra: const Text('when it starts', style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted))),
@@ -1083,9 +1077,6 @@ class _EmailEditorState extends State<_EmailEditor> {
             children: [
               const Text('Send email',
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: SelmsColors.textPrimary)),
-              const SizedBox(height: 4),
-              const Text('Save it and the flow sends it for you when this step comes up (or on its date).',
-                  style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
               const SizedBox(height: 12),
               Flexible(
                 child: SingleChildScrollView(

@@ -39,6 +39,7 @@ class SchedulingDialog extends StatefulWidget {
     this.planStarted = false,
     this.booked,
     this.notAfter,
+    this.showLinkField = true,
   });
 
   final String apiBaseUrl;
@@ -61,6 +62,10 @@ class SchedulingDialog extends StatefulWidget {
   final String? booked; // "Booked for 25 Oct 2026, 2:00 PM"
   /// Exit interview: nothing after the employee's last working day (YYYY-MM-DD).
   final String? notAfter;
+
+  /// false from the onboarding / offboarding flows: online meetings always get
+  /// the Google Meet link SELMS creates, so there is no link box to fill in.
+  final bool showLinkField;
 
   @override
   State<SchedulingDialog> createState() => _SchedulingDialogState();
@@ -113,7 +118,7 @@ class _SchedulingDialogState extends State<SchedulingDialog> {
           : (widget.employee?['work_location_type'] == 'Remote' ? 'online' : 'in_person');
       if ((plan['title'] as String?)?.isNotEmpty == true) _titleCtrl.text = plan['title'] as String;
       if ((plan['location'] as String?)?.isNotEmpty == true) _locationCtrl.text = plan['location'] as String;
-      _linkCtrl.text = plan['meeting_url'] as String? ?? '';
+      _linkCtrl.text = widget.showLinkField ? (plan['meeting_url'] as String? ?? '') : '';
       for (final a in (plan['attendees'] as List? ?? const [])) {
         final person = Map<String, dynamic>.from(a as Map);
         if (!_people.any((p) => p['id'] == person['id'])) _people.add(person);
@@ -604,7 +609,7 @@ class _SchedulingDialogState extends State<SchedulingDialog> {
                     _modeChip('Online', 'online', Icons.videocam_outlined),
                   ],
                 ),
-                if (_mode != 'in_person') ...[
+                if (_mode != 'in_person' && widget.showLinkField) ...[
                   const SizedBox(height: 12),
                   const Text('Meeting link',
                       style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w500, color: SelmsColors.textSecondary)),
@@ -614,15 +619,15 @@ class _SchedulingDialogState extends State<SchedulingDialog> {
                     decoration: const InputDecoration(hintText: 'https://meet.google.com/…  (optional)'),
                     style: const TextStyle(fontSize: 13),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _googleConnected
-                        ? 'Leave empty and SELMS will create a Google Meet link and email the invite.'
-                        : _hasDefaultLink
-                            ? 'Leave empty to use the default company meeting link.'
-                            : 'Paste a Meet/Teams link, or connect Google on the Smart Schedule page to auto-create one.',
-                    style: const TextStyle(fontSize: 10.5, color: SelmsColors.textMuted),
-                  ),
+                  if (!_googleConnected) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      _hasDefaultLink
+                          ? 'Leave empty to use the default company meeting link.'
+                          : 'Paste a Meet/Teams link, or connect Google on the Smart Schedule page to auto-create one.',
+                      style: const TextStyle(fontSize: 10.5, color: SelmsColors.textMuted),
+                    ),
+                  ],
                 ],
                 if (_error != null) ...[
                   const SizedBox(height: 8),

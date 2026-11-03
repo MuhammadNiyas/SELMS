@@ -199,12 +199,6 @@ class _SelmsLoginScreenState extends State<SelmsLoginScreen> {
                           ),
                           child: _signInForm(),
                         ),
-                        const SizedBox(height: 18),
-                        const Text(
-                          'Accounts are created by your HR administrator — there is no public sign-up.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 11.5, height: 1.4, color: SelmsColors.textMuted),
-                        ),
                       ],
                     ),
                   ),
