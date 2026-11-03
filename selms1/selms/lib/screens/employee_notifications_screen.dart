@@ -149,7 +149,6 @@ class _EmployeeNotificationsPanelState extends State<EmployeeNotificationsPanel>
                 return const EmpEmptyState(
                   icon: Icons.notifications_none,
                   title: "You're all caught up",
-                  message: 'Updates from HR and IT, and reminders, will appear here.',
                 );
               }
               return ListView.separated(

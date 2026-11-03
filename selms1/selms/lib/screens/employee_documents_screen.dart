@@ -336,7 +336,6 @@ class _EmployeeDocumentsScreenState extends State<EmployeeDocumentsScreen> {
                       child: EmpEmptyState(
                         icon: Icons.folder_open_outlined,
                         title: 'No documents yet',
-                        message: 'Documents and surveys HR gives you during onboarding will appear here.',
                       ),
                     ),
                   ],

@@ -206,7 +206,7 @@ class EmpIconBadge extends StatelessWidget {
 }
 
 class EmpEmptyState extends StatelessWidget {
-  const EmpEmptyState({super.key, required this.icon, required this.title, required this.message});
+  const EmpEmptyState({super.key, required this.icon, required this.title, this.message = ''});
 
   final IconData icon;
   final String title;
@@ -221,10 +221,12 @@ class EmpEmptyState extends StatelessWidget {
           EmpIconBadge(icon, size: 52, bg: Colors.white, fg: SelmsColors.textMuted),
           const SizedBox(height: 12),
           Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 4),
-          Text(message,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 12.5, color: SelmsColors.textMuted, height: 1.4)),
+          if (message.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 12.5, color: SelmsColors.textMuted, height: 1.4)),
+          ],
         ],
       ),
     );
@@ -760,13 +762,15 @@ class EmpTimeline extends StatelessWidget {
                             ],
                           ],
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          item.done
-                              ? (item.doneAt != null ? 'Completed ${empDate(item.doneAt)}' : 'Completed')
-                              : hintFor(item),
-                          style: const TextStyle(fontSize: 12, color: SelmsColors.textMuted, height: 1.35),
-                        ),
+                        if (item.done || hintFor(item).isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            item.done
+                                ? (item.doneAt != null ? 'Completed ${empDate(item.doneAt)}' : 'Completed')
+                                : hintFor(item),
+                            style: const TextStyle(fontSize: 12, color: SelmsColors.textMuted, height: 1.35),
+                          ),
+                        ],
                         ?extra,
                       ],
                     ),

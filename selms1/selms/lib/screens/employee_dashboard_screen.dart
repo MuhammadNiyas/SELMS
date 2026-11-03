@@ -201,7 +201,7 @@ class _EmployeeDashboardScreenState extends State<EmployeeDashboardScreen> {
               ),
               if (d.notifications.items.isEmpty)
                 const EmpCard(
-                  child: Text('No activity yet — updates from HR and IT will show up here.',
+                  child: Text('No activity yet',
                       style: TextStyle(fontSize: 12.5, color: SelmsColors.textMuted)),
                 )
               else

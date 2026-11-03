@@ -38,16 +38,6 @@ class _EmployeeOffboardingScreenState extends State<EmployeeOffboardingScreen> {
     await _future;
   }
 
-  String _hint(ChecklistItem item) => switch (item.id) {
-        final id when id.startsWith('survey:') => 'A short survey from HR. Answer it in the Documents tab.',
-        'flow_documents' => 'Complete the documents HR gave you, in the Documents tab.',
-        'departure_recorded' => 'Recorded by HR.',
-        'exit_interview' => 'It will be booked for you — tap to see the time and link.',
-        'equipment_returned' => 'Get your items ready and return them to IT — tap to open.',
-        'access_revoked' => 'IT will close your system access on your last working day.',
-        _ => '',
-      };
-
   String _status(ChecklistItem item) =>
       item.done ? (item.doneAt != null ? 'Completed ${empDate(item.doneAt)}' : 'Completed') : 'Not done yet';
 
@@ -151,8 +141,6 @@ class _EmployeeOffboardingScreenState extends State<EmployeeOffboardingScreen> {
                       const EmpEmptyState(
                         icon: Icons.verified_user_outlined,
                         title: 'Nothing here right now',
-                        message: 'Offboarding is not active for you. If you ever leave the company, '
-                            'HR will start it and your steps will appear here.',
                       ),
                       const Divider(height: 1, color: SelmsColors.border),
                       const SizedBox(height: 14),
@@ -247,7 +235,7 @@ class _EmployeeOffboardingScreenState extends State<EmployeeOffboardingScreen> {
               const EmpSectionHeader('Steps'),
               EmpTimeline(
                 items: o.items,
-                hintFor: _hint,
+                hintFor: (_) => '',
                 accent: EmpColors.leaving,
                 extraFor: (item) => item.meeting != null ? EmpMeetingTile(meeting: item.meeting!) : null,
                 onTap: (item) => _openStep(item, o),

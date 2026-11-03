@@ -4,11 +4,14 @@
 // the pop-up of the Offboarding tab's "Equipment Returned" step: what to
 // return, by when and where (or by post for remote staff); a short
 // checklist per item (data backed up, signed out, accessories, the condition
-// and a note); and "I'm ready to return" so IT knows. An item only shows as
+// and a note); and "I'm ready to return" so IT knows. Remote staff instead book the Pos
+// Malaysia parcel themselves (to the company address shown here) and send
+// IT the tracking number to review. An item only shows as
 // returned once IT has really received it (Products / Scan) - there is no
 // "returned" tick here.
 
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import '../services/api_client.dart';
 import '../theme/selms_colors.dart';
 import '../widgets/employee_ui.dart';
@@ -50,6 +53,7 @@ class _EmployeeReturnPanelState extends State<EmployeeReturnPanel> {
   /// What the employee is filling in, per equipment id (saved with "Save").
   final Map<String, Map<String, dynamic>> _draft = {};
   final Map<String, TextEditingController> _notes = {};
+  final _tracking = TextEditingController();
 
   @override
   void initState() {
@@ -62,6 +66,7 @@ class _EmployeeReturnPanelState extends State<EmployeeReturnPanel> {
     for (final c in _notes.values) {
       c.dispose();
     }
+    _tracking.dispose();
     super.dispose();
   }
 
@@ -90,6 +95,11 @@ class _EmployeeReturnPanelState extends State<EmployeeReturnPanel> {
 
   List<Map<String, dynamic>> get _items => ((_data?['items'] as List?) ?? const []).cast<Map<String, dynamic>>();
   List<Map<String, dynamic>> get _outstanding => _items.where((i) => i['returned'] != true).toList();
+
+  /// Every item still with the employee has its checklist done and saved.
+  bool get _allSaved =>
+      _outstanding.isNotEmpty &&
+      _outstanding.every((i) => _complete(i['prep'] as Map<String, dynamic>?) && !_unsaved(i));
 
   bool _complete(Map<String, dynamic>? p) {
     if (p == null || !_conditions.contains(p['condition'])) return false;
@@ -220,43 +230,154 @@ class _EmployeeReturnPanelState extends State<EmployeeReturnPanel> {
     );
   }
 
-  /// Remote staff: the Pos Malaysia return parcel IT set up, and "I've posted it".
+  /// The QR code screenshot Pos gave for the return parcel - IT sees it on the shipment.
+  Future<void> _pickQr() async {
+    final picked = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 90);
+    if (picked == null) return;
+    final bytes = await picked.readAsBytes();
+    final name = picked.name.contains('.') ? picked.name : 'qr.png';
+    await _run(() => widget.api.uploadMyReturnQr(bytes, name), 'QR code uploaded - IT can see it.');
+  }
+
+  Widget _qrUpload(Map<String, dynamic> data) {
+    final url = data['qr_image_url'] as String?;
+    if (url == null || url.isEmpty) {
+      return EmpSheetButton(
+        label: 'Upload the QR code from Pos',
+        icon: Icons.qr_code_2,
+        primary: false,
+        onPressed: _busy ? () {} : _pickQr,
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Container(
+            width: 110,
+            height: 110,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border.all(color: SelmsColors.border),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Image.network('${widget.api.baseUrl}$url',
+                fit: BoxFit.contain,
+                errorBuilder: (_, _, _) => const Center(child: Icon(Icons.broken_image_outlined))),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('QR code uploaded - IT can see it.',
+                    style: TextStyle(fontSize: 12, color: SelmsColors.textSecondary)),
+                TextButton(onPressed: _busy ? null : _pickQr, child: const Text('Replace')),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Remote staff: where to send the parcel, a link to book it on Pos
+  /// Malaysia, then the tracking number - which goes to IT to review.
   Widget _byPost(Map<String, dynamic> data) {
     final s = (data['shipment'] as Map?)?.cast<String, dynamic>();
     final ref = s?['pos_reference'] as String? ?? '';
     final postedAt = data['posted_at'] as String?;
+    final company = ((data['company'] as Map?) ?? const {}).cast<String, dynamic>();
+    final rejected = (data['rejected'] as Map?)?.cast<String, dynamic>();
+    final companyAddress = company['address'] as String? ?? '';
+    final posUrl = data['pos_url'] as String? ?? 'https://send.pos.com.my/home/e-connote?lg=en';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const EmpSectionHeader('Return by post'),
-        if (s == null)
-          const EmpSheetText('You work remotely, so your equipment goes back by Pos Malaysia. '
-              'IT will add the return parcel details here - pack your items once you have done the checklist below.')
-        else ...[
-          EmpShipmentTile(shipment: s),
+        if (postedAt != null) ...[
+          if (s != null) EmpShipmentTile(shipment: s),
           const SizedBox(height: 10),
           if (ref.isNotEmpty) ...[
-            EmpCopyRow(label: 'Pos Malaysia reference', value: ref),
+            EmpCopyRow(label: 'Your tracking number', value: ref),
             EmpSheetButton(
               label: 'Track on Pos Malaysia',
               icon: Icons.local_shipping_outlined,
-              onPressed: () => empOpenUrl(s['tracking_url'] as String? ?? _posTrackingUrl),
+              onPressed: () => empOpenUrl(s?['tracking_url'] as String? ?? _posTrackingUrl),
             ),
-          ] else
-            const EmpSheetText('IT will add the Pos Malaysia reference once the parcel is booked.'),
-          const SizedBox(height: 8),
-          if (postedAt != null)
-            EmpSheetText('You told IT you posted it on ${empDate(postedAt)}. Each item is ticked off when IT receives it.')
-          else if (_outstanding.isNotEmpty)
-            SizedBox(
+          ],
+          EmpSheetText('Sent to IT on ${empDate(postedAt)}. IT checks your parcel and ticks each item off when it arrives.'),
+          _qrUpload(data),
+        ] else ...[
+          if (rejected != null)
+            Container(
               width: double.infinity,
-              child: OutlinedButton(
-                onPressed: _busy
-                    ? null
-                    : () => _run(() => widget.api.markReturnPosted(), 'IT has been told your parcel is on its way.'),
-                child: const Text("I've posted it"),
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: EmpColors.warningBg, borderRadius: BorderRadius.circular(10)),
+              child: Text(
+                "IT couldn't accept your last parcel details"
+                '${(rejected['reason'] as String? ?? '').isNotEmpty ? ': ${rejected['reason']}' : ''}. '
+                'Please check them and send the tracking number and QR code again.',
+                style: const TextStyle(fontSize: 12.5, color: EmpColors.warning, height: 1.35),
               ),
             ),
+          const EmpSheetText('You work remotely, so you post your equipment back with Pos Malaysia. '
+              'Finish the checklist for each item above, pack them, then follow the steps below.'),
+          const EmpSheetText('Send the parcel to this address.', heading: '1. Where it goes'),
+          if (companyAddress.isEmpty)
+            const EmpSheetText("IT hasn't added the company's return address yet - message IT before you post anything.")
+          else ...[
+            if ((company['name'] as String? ?? '').isNotEmpty) EmpCopyRow(label: 'Company', value: company['name'] as String),
+            EmpCopyRow(label: 'Address', value: companyAddress),
+            if ((company['phone'] as String? ?? '').isNotEmpty) EmpCopyRow(label: 'Phone', value: company['phone'] as String),
+          ],
+          const EmpSheetText('Book the parcel on Pos Malaysia (e-Connote). Use the address above as the receiver '
+              'and your own details as the sender, then drop it at a Pos counter.', heading: '2. Book the parcel'),
+          EmpSheetButton(
+            label: 'Create the parcel on Pos Malaysia',
+            icon: Icons.open_in_new,
+            onPressed: () => empOpenUrl(posUrl),
+          ),
+          const EmpSheetText('Upload the QR code Pos gave you, type the tracking number and send it to IT. '
+              'IT reviews it and receives each item when the parcel arrives.', heading: '3. Send it to IT'),
+          _qrUpload(data),
+          TextField(
+            controller: _tracking,
+            onChanged: (_) => setState(() {}),
+            style: const TextStyle(fontSize: 13),
+            decoration: const InputDecoration(
+              isDense: true,
+              border: OutlineInputBorder(),
+              labelText: 'Pos Malaysia tracking number',
+              hintText: 'e.g. EP123456789MY',
+            ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: _busy || !_allSaved || _tracking.text.trim().isEmpty
+                  ? null
+                  : () => _run(() => widget.api.markReturnPosted(_tracking.text.trim()),
+                      "Sent to IT - they'll check your parcel."),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: EmpColors.leaving,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 13),
+              ),
+              child: const Text('Send to IT'),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Center(
+            child: Text(
+              !_allSaved ? 'Save the checklist for each item first.' : 'IT gets your tracking number to review.',
+              style: const TextStyle(fontSize: 11.5, color: SelmsColors.textMuted),
+            ),
+          ),
         ],
       ],
     );
@@ -273,8 +394,7 @@ class _EmployeeReturnPanelState extends State<EmployeeReturnPanel> {
     final back = total - _outstanding.length;
     final readyAt = data['ready_at'] as String?;
     final byPost = data['by_post'] == true;
-    final allSaved = _outstanding.isNotEmpty &&
-        _outstanding.every((i) => _complete(i['prep'] as Map<String, dynamic>?) && !_unsaved(i));
+    final allSaved = _allSaved;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -296,14 +416,22 @@ class _EmployeeReturnPanelState extends State<EmployeeReturnPanel> {
               Text(byPost ? 'Return by: Pos Malaysia (see below)' : 'Bring them to: ${data['location'] ?? 'the IT department'}',
                   style: const TextStyle(fontSize: 12.5, color: SelmsColors.textPrimary)),
               const SizedBox(height: 8),
-              EmpPill(total == 0 ? 'Nothing assigned' : '$back of $total returned', bg: Colors.white, fg: EmpColors.leaving),
+              EmpPill(
+                  total == 0
+                      ? (data['nothing_to_collect_at'] != null ? 'Nothing to return' : 'IT is checking')
+                      : '$back of $total returned',
+                  bg: Colors.white,
+                  fg: EmpColors.leaving),
             ],
           ),
         ),
-        if (byPost) _byPost(data),
         const EmpSectionHeader('Your items'),
         if (total == 0)
-          const EmpSheetText('No company equipment is assigned to you.')
+          EmpSheetText(data['nothing_to_collect_at'] != null
+              ? 'IT has confirmed you have no company equipment to return.'
+              : 'No company equipment is on record for you. IT will check and confirm - '
+                  'if you do have anything (laptop, phone, badge, accessories), bring it to '
+                  '${data['location'] ?? 'the IT department'} or message IT.')
         else
           for (final it in _items)
             EmpEquipmentTile(
@@ -322,10 +450,12 @@ class _EmployeeReturnPanelState extends State<EmployeeReturnPanel> {
               child: const Text('Everything is back with IT — thank you!',
                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: EmpColors.success)),
             )
+          else if (byPost)
+            _byPost(data)
           else if (readyAt != null)
             EmpSheetText(
               "IT has been told you're ready (${empDate(readyAt)}). "
-              '${byPost ? 'Post the parcel and tap "I\'ve posted it" above.' : 'Bring your items to ${data['location'] ?? 'the IT department'}.'} '
+              'Bring your items to ${data['location'] ?? 'the IT department'}. '
               'Each one is ticked off when IT receives it.',
             )
           else ...[

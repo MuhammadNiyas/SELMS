@@ -299,7 +299,6 @@ class _EmployeeScheduleScreenState extends State<EmployeeScheduleScreen> {
                 const EmpEmptyState(
                   icon: Icons.calendar_month_outlined,
                   title: 'Nothing scheduled yet',
-                  message: 'Sessions HR or IT book with you — like your orientation — will show up here.',
                 ),
               ],
             ],

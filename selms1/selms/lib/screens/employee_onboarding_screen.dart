@@ -52,10 +52,7 @@ class _EmployeeOnboardingScreenState extends State<EmployeeOnboardingScreen> {
 
   String _hint(ChecklistItem item) => switch (item.id) {
         final id when id.startsWith('survey:') => 'A short survey from HR. Answer it in the Documents tab.',
-        'welcome_email' => 'Sent to your personal email once HR starts your onboarding.',
         'documents_signed' => 'Complete the documents HR gave you, in the Documents tab.',
-        'orientation' => 'HR books this for you — tap to see the time and link.',
-        'it_equipment' => 'Marked automatically once IT assigns your equipment.',
         'profile_setup' => 'Upload a profile photo in My profile.',
         _ => '',
       };
