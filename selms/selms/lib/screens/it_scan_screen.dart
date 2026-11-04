@@ -12,6 +12,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import '../models/equipment.dart';
 import '../services/api_client.dart';
 import '../theme/selms_colors.dart';
+import '../widgets/equipment_photo.dart';
 import '../widgets/it_app_shell.dart';
 import 'assign_employee_screen.dart';
 import 'equipment_detail_screen.dart';
@@ -69,6 +70,7 @@ class _ItScanScreenState extends State<ItScanScreen> {
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       builder: (sheetContext) => _FoundEquipmentSheet(
+        apiBaseUrl: widget.apiBaseUrl,
         equipment: e,
         onViewDetails: () {
           Navigator.of(sheetContext).pop();
@@ -251,12 +253,14 @@ class _RoundIconButton extends StatelessWidget {
 /// applicable one enabled.
 class _FoundEquipmentSheet extends StatelessWidget {
   const _FoundEquipmentSheet({
+    required this.apiBaseUrl,
     required this.equipment,
     required this.onViewDetails,
     required this.onAssign,
     required this.onRetrieve,
   });
 
+  final String apiBaseUrl;
   final Equipment equipment;
   final VoidCallback onViewDetails;
   final VoidCallback onAssign;
@@ -299,12 +303,10 @@ class _FoundEquipmentSheet extends StatelessWidget {
 
     final productDetailsBlock = Row(
       children: [
-        Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(color: SelmsColors.accentBg, borderRadius: BorderRadius.circular(8)),
-          alignment: Alignment.center,
-          child: Icon(_typeIcon(equipment.type), size: 18, color: SelmsColors.ink),
+        EquipmentPhoto(
+          apiBaseUrl: apiBaseUrl,
+          photoUrl: equipment.photoUrl,
+          fallback: Icon(_typeIcon(equipment.type), size: 18, color: SelmsColors.ink),
         ),
         const SizedBox(width: 10),
         Expanded(

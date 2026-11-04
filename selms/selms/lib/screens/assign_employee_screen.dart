@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import '../models/equipment.dart';
 import '../services/api_client.dart';
 import '../widgets/employee_avatar.dart';
+import '../widgets/equipment_photo.dart';
 import '../theme/selms_colors.dart';
 
 class AssignEmployeeScreen extends StatefulWidget {
@@ -128,8 +129,13 @@ class _AssignEmployeeScreenState extends State<AssignEmployeeScreen> {
                                 padding: const EdgeInsets.symmetric(vertical: 4),
                                 child: Row(
                                   children: [
-                                    const Icon(Icons.qr_code, size: 14, color: SelmsColors.textSecondary),
-                                    const SizedBox(width: 8),
+                                    EquipmentPhoto(
+                                      apiBaseUrl: widget.apiBaseUrl,
+                                      photoUrl: e.photoUrl,
+                                      size: 36,
+                                      fallback: const Icon(Icons.qr_code, size: 14, color: SelmsColors.textSecondary),
+                                    ),
+                                    const SizedBox(width: 10),
                                     Expanded(
                                       child: Column(
                                         crossAxisAlignment: CrossAxisAlignment.start,

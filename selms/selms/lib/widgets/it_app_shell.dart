@@ -85,8 +85,8 @@ class _ItAppShellState extends State<ItAppShell> {
           height: 460,
           child: ChatPanel(
             title: 'SELMS IT Assistant',
-            hint: "Hi! I'm your SELMS IT Assistant. I can find company documents and policies for you.",
-            suggestions: const ['what documents do we have?', 'IT policy', 'acceptable use'],
+            hint: "Hi! I'm your SELMS IT Assistant. Ask me about equipment, warranties, parcels or company documents.",
+            suggestions: const ['which laptops are free?', 'warranties ending soon', 'IT policy'],
             onSend: api.itChat,
             documentUrl: api.documentDownloadUrl,
           ),

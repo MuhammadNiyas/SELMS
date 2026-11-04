@@ -52,13 +52,15 @@ class _EmployeeSetPasswordScreenState extends State<EmployeeSetPasswordScreen> {
     super.dispose();
   }
 
-  bool get _longEnough => _newCtrl.text.length >= 8;
+  bool get _rightLength => _newCtrl.text.length >= 8 && _newCtrl.text.length <= 10;
+  bool get _hasUppercase => RegExp(r'[A-Z]').hasMatch(_newCtrl.text);
   bool get _hasNumber => RegExp(r'\d').hasMatch(_newCtrl.text);
-  bool get _hasLetter => RegExp(r'[A-Za-z]').hasMatch(_newCtrl.text);
+  bool get _hasSpecial => RegExp(r'[^A-Za-z0-9\s]').hasMatch(_newCtrl.text);
 
   Future<void> _save() async {
-    if (!_longEnough || !_hasNumber || !_hasLetter) {
-      setState(() => _error = 'Your password needs at least 8 characters, with letters and a number.');
+    if (!_rightLength || !_hasUppercase || !_hasNumber || !_hasSpecial) {
+      setState(() => _error =
+          'Your password needs 8 to 10 characters, with an uppercase letter, a number and a special character.');
       return;
     }
     if (_newCtrl.text != _confirmCtrl.text) {
@@ -148,19 +150,11 @@ class _EmployeeSetPasswordScreenState extends State<EmployeeSetPasswordScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(color: SelmsColors.accentBg, borderRadius: BorderRadius.circular(12)),
-                      child: const Icon(Icons.lock_reset, color: SelmsColors.ink),
-                    ),
-                    const SizedBox(height: 14),
                     Text(firstName.isEmpty ? 'Create your password' : 'Welcome, $firstName',
                         style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
                     const SizedBox(height: 4),
                     const Text(
-                      'You signed in with the temporary password HR sent you. '
-                      'Create your own password to continue — you will use it from now on.',
+                      'Create your own new password to continue.',
                       style: TextStyle(fontSize: 12.5, color: SelmsColors.textSecondary, height: 1.45),
                     ),
                     const SizedBox(height: 20),
@@ -171,7 +165,7 @@ class _EmployeeSetPasswordScreenState extends State<EmployeeSetPasswordScreen> {
                       controller: _newCtrl,
                       obscureText: _obscure,
                       textInputAction: TextInputAction.next,
-                      decoration: _field('At least 8 characters').copyWith(
+                      decoration: _field('8 to 10 characters').copyWith(
                         suffixIcon: IconButton(
                           icon: Icon(_obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
                               size: 19, color: SelmsColors.textMuted),
@@ -180,8 +174,10 @@ class _EmployeeSetPasswordScreenState extends State<EmployeeSetPasswordScreen> {
                       ),
                     ),
                     const SizedBox(height: 6),
-                    _rule(_longEnough, 'At least 8 characters'),
-                    _rule(_hasLetter && _hasNumber, 'Letters and at least one number'),
+                    _rule(_rightLength, '8 to 10 characters'),
+                    _rule(_hasUppercase, 'At least one uppercase letter'),
+                    _rule(_hasNumber, 'At least one number'),
+                    _rule(_hasSpecial, 'At least one special character'),
                     const SizedBox(height: 14),
                     const Text('Confirm new password',
                         style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: SelmsColors.textSecondary)),

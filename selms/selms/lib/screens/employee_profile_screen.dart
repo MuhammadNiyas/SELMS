@@ -397,8 +397,14 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
   }
 
   Future<void> _save() async {
-    if (_new.text.length < 8) {
-      setState(() => _error = 'The new password must be at least 8 characters.');
+    final p = _new.text;
+    if (p.length < 8 ||
+        p.length > 10 ||
+        !RegExp(r'[A-Z]').hasMatch(p) ||
+        !RegExp(r'\d').hasMatch(p) ||
+        !RegExp(r'[^A-Za-z0-9\s]').hasMatch(p)) {
+      setState(() => _error =
+          'The new password needs 8 to 10 characters, with an uppercase letter, a number and a special character.');
       return;
     }
     if (_new.text != _confirm.text) {
@@ -440,7 +446,7 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
           children: [
             TextField(controller: _current, obscureText: !_show, decoration: deco('Current password')),
             const SizedBox(height: 12),
-            TextField(controller: _new, obscureText: !_show, decoration: deco('New password (min. 8 characters)')),
+            TextField(controller: _new, obscureText: !_show, decoration: deco('New password')),
             const SizedBox(height: 12),
             TextField(
               controller: _confirm,

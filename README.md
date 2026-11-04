@@ -89,5 +89,5 @@ Sign in with the HR or IT account you created. Employee accounts are created by 
 - Pos Malaysia parcels are booked on the Pos website, then recorded in SELMS.
 - Google Meet links need a connected Google account.
 - The chatbot only answers from company information it has been given.
-- Meetings run from 10 AM to 5 PM, Monday to Friday, on one shared schedule.
+- Meetings run within the working hours and days set by HR, on one shared schedule.
 - Work email accounts are created manually by IT.

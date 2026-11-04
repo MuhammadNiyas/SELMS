@@ -16,10 +16,14 @@ class EmployeeAvatar extends StatelessWidget {
     this.photoUrl,
     this.size = 32,
     this.background = SelmsColors.accentBg,
+    this.initials,
   });
 
   final String apiBaseUrl;
   final String name;
+
+  /// Letters to show instead of ones worked out from [name].
+  final String? initials;
 
   /// The stored path, e.g. /uploads/EMP-001-1791692874.png (or a full URL).
   final String? photoUrl;
@@ -35,8 +39,8 @@ class EmployeeAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final initials = Text(
-      initialsOf(name),
+    final letters = Text(
+      initials ?? initialsOf(name),
       style: TextStyle(fontSize: size * 0.36, fontWeight: FontWeight.w600, color: SelmsColors.ink),
     );
     final url = photoUrl;
@@ -53,9 +57,9 @@ class EmployeeAvatar extends StatelessWidget {
               width: size,
               height: size,
               fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => initials,
+              errorBuilder: (_, _, _) => letters,
             )
-          : initials,
+          : letters,
     );
   }
 }

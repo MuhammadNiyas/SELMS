@@ -18,7 +18,6 @@ import '../theme/selms_colors.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/flow_step_editors.dart';
 import '../widgets/scheduling_dialog.dart';
-import '../widgets/start_review_dialog.dart';
 import 'onboarding_stepper_screen.dart';
 
 class OnboardingScreen extends StatefulWidget {
@@ -52,6 +51,29 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   Timer? _runTimer;
   String? _completingStepId;
 
+  // Steps HR has opened for the picked employee. Start stays locked until
+  // every step is in here.
+  final Set<String> _viewed = {};
+
+  bool get _awaitingStart =>
+      _selectedEmployee != null && _selectedEmployee!['onboarding_started'] != true && _runById.isEmpty;
+
+  // One process at a time: true while the picked employee is being offboarded.
+  bool _otherProcessRunning = false;
+
+  bool get _selectedCompleted => _activeOnboarding
+      .any((e) => e['employee_id'] == _selectedEmployee?['employee_id'] && e['completed'] == true);
+
+  bool get _allViewed =>
+      !_loading &&
+      !_otherProcessRunning &&
+      _nodes.isNotEmpty &&
+      _nodes.where((n) => n.icon != 'ti-flag' && n.type != 'condition').every((n) => _viewed.contains(n.id));
+
+  void _markViewed(OnboardingFlowNode node) {
+    if (_awaitingStart) setState(() => _viewed.add(node.id));
+  }
+
   @override
   void initState() {
     super.initState();
@@ -76,8 +98,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
     try {
       final steps = await _api.getOnboardingRun(emp['employee_id'] as String);
+      final leaving = await _api.offboardingActiveList();
       if (!mounted || _selectedEmployee == null) return;
-      setState(() => _runById = {for (final s in steps) s['id'] as String: s});
+      setState(() {
+        _runById = {for (final s in steps) s['id'] as String: s};
+        _otherProcessRunning =
+            leaving.any((e) => e['employee_id'] == emp['employee_id'] && e['completed'] != true);
+      });
       // The history panel's progress moves with it.
       _loadActiveOnboarding();
     } catch (_) {
@@ -132,7 +159,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     try {
       final list = await _api.onboardingCandidates();
       if (!mounted) return;
-      setState(() => _candidates = list);
+      setState(() {
+        _candidates = list;
+        // Keeps the picked employee's "started" flag current after Start or Cancel.
+        final picked = _selectedEmployee;
+        if (picked != null) {
+          _selectedEmployee = list.firstWhere((c) => c['employee_id'] == picked['employee_id'], orElse: () => picked);
+        }
+      });
     } catch (_) {
       // Candidate list is secondary — the flow itself still loads without it.
     }
@@ -264,7 +298,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     // null means the dialog was dismissed without a choice — leave selection
     // untouched. An empty map means "Default template" was tapped explicitly.
     if (!mounted || picked == null) return;
-    setState(() => _selectedEmployee = picked.isEmpty ? null : picked);
+    setState(() {
+      _selectedEmployee = picked.isEmpty ? null : picked;
+      _viewed.clear();
+      _runById = {};
+      _otherProcessRunning = false;
+    });
     _loadFlow();
   }
 
@@ -334,15 +373,35 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _markDirty();
   }
 
+  /// Clicking a step, or its pencil. A step with no window of its own opens a
+  /// view-only one.
+  Future<void> _viewStep(OnboardingFlowNode node) async {
+    if (_awaitingStart && _otherProcessRunning) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Finish or cancel offboarding first.')));
+      return;
+    }
+    if (!node.locked || node.step != null || node.icon == 'ti-mail' || node.icon == 'ti-calendar') {
+      return _editStep(node);
+    }
+    final employeeId = _selectedEmployee!['employee_id'] as String;
+    if (await showStepPreview(context, _api, 'onboarding', employeeId, node) && mounted) _markViewed(node);
+  }
+
   Future<void> _editStep(OnboardingFlowNode node) async {
     // Email and scheduling steps open their own window from the pencil.
     // (Steps with settings - Documents, Survey, Send email, Send notification - have their own editors below.)
-    if (node.step == null && node.locked && node.icon == 'ti-mail') return _openEmailPopup(node);
+    if (node.step == null && node.locked && node.icon == 'ti-mail') {
+      // Only a saved email counts: Start sends what was saved.
+      if (await _openEmailPopup(node) && mounted) _markViewed(node);
+      return;
+    }
     if (node.step == null && node.icon == 'ti-calendar') {
       // The orientation / exit interview step is planned here and booked at Start;
       // a meeting added with "+" is booked straight away in the scheduling window.
       return node.locked ? _openMeetingPlan(node) : _openSchedulingPopup(node);
     }
+    _markViewed(node);
     if (node.step != null) {
       if (await editStepNode(context, _api, node) && mounted) {
         setState(() {});
@@ -420,6 +479,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       return;
     }
     final started = _selectedEmployee != null && _runById.isNotEmpty;
+    _markViewed(node);
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (_) => SchedulingDialog(
@@ -506,43 +566,26 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   bool _startingOnboarding = false;
 
-  /// One-click automation: drafts the welcome email and auto-books
-  /// orientation server-side (see /api/onboarding/<id>/auto-start), then
-  /// opens the same review dialog HR would use manually — sending is
-  /// still a separate, deliberate click.
+  /// Starts the flow (see /api/onboarding/<id>/auto-start). Only reachable once
+  /// HR has opened every step, and the saved email is what gets sent.
   Future<void> _startOnboardingAuto() async {
-    if (_selectedEmployee == null) return;
+    if (_selectedEmployee == null || !_allViewed) return;
     final employeeId = _selectedEmployee!['employee_id'] as String;
 
-    // Review first: every step in order. Nothing starts unless HR confirms.
-    setState(() => _startingOnboarding = true);
-    Map<String, dynamic> review;
-    try {
-      review = await _api.getStartReview('onboarding', employeeId);
-    } catch (e) {
-      if (mounted) {
-        setState(() => _startingOnboarding = false);
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(e.toString()), backgroundColor: SelmsColors.rose));
-      }
-      return;
+    // Start runs the saved flow, so unsaved changes have to go in first.
+    if (_dirty) {
+      await _save();
+      if (_dirty || !mounted) return;
     }
-    if (!mounted) return;
-    setState(() => _startingOnboarding = false);
-    final confirmed = await showStartReview(context, review: review, apiBaseUrl: widget.apiBaseUrl);
-    if (confirmed == null || !mounted) return;
 
     // The orientation format is planned with the pencil on that step.
     final mode = _plannedMeetingMode('Schedule orientation');
 
     setState(() => _startingOnboarding = true);
     try {
-      // The reviewed email is saved first, so Start sends it straight away.
-      if (confirmed.isNotEmpty) {
-        await _api.saveOnboardingEmail(employeeId, confirmed['subject']!, confirmed['body']!);
-      }
       final result = await _api.autoStartOnboarding(employeeId, mode: mode);
       if (!mounted) return;
+      _viewed.clear();
       // The flow runs straight through, so the banner reports what ran and
       // the first step still waiting on a person.
       final orientation = result.orientation;
@@ -556,7 +599,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       ];
 
       if (result.subject.isNotEmpty) {
-        await showDialog<void>(
+        await showDialog<bool>(
           context: context,
           builder: (_) => _EmailStepDialog(
             apiBaseUrl: widget.apiBaseUrl,
@@ -621,6 +664,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     try {
       final result = await _api.cancelOnboarding(employeeId);
       if (!mounted) return;
+      setState(() {
+        _viewed.clear();
+        _runById = {};
+      });
       if (result.warnings.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Onboarding cancelled.')));
       } else {
@@ -655,14 +702,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
   }
 
-  void _openEmailPopup(OnboardingFlowNode node) {
+  /// True when HR pressed Save.
+  Future<bool> _openEmailPopup(OnboardingFlowNode node) async {
     if (_selectedEmployee == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Choose an employee at the top first — this step needs someone to send to.')),
       );
-      return;
+      return false;
     }
-    showDialog<void>(
+    final saved = await showDialog<bool>(
       context: context,
       builder: (_) => _EmailStepDialog(
         apiBaseUrl: widget.apiBaseUrl,
@@ -672,6 +720,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         when: node.when,
       ),
     );
+    return saved == true;
   }
 
   void _openSchedulingPopup(OnboardingFlowNode node) {
@@ -681,6 +730,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       );
       return;
     }
+    _markViewed(node);
     showDialog<bool>(
       context: context,
       builder: (_) => SchedulingDialog(
@@ -836,10 +886,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final hint = run?['hint'] as String?;
     // Steps only a person can finish (HR's own custom steps) get a button.
     final canTick = isCurrent && run?['kind'] == 'hr' && node.label != 'Send welcome email';
+    // Before Start, HR clicks each step to open it.
+    final canView = _awaitingStart && !isEnd && !isCondition && !isReordering;
 
     return GestureDetector(
+      onTap: canView ? () => _viewStep(node) : null,
       onDoubleTap: () => _toggleReorder(node.id),
-      child: Container(
+      child: MouseRegion(
+        cursor: canView ? SystemMouseCursors.click : MouseCursor.defer,
+        child: Container(
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
@@ -1000,11 +1055,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 ),
               ),
             ],
+            if (_awaitingStart && _viewed.contains(node.id))
+              const Padding(
+                padding: EdgeInsets.all(4),
+                child: Icon(Icons.check_circle, size: 15, color: Color(0xFF16A34A)),
+              ),
             if (node.locked) ...[
               // Locked steps with settings (Documents, Survey) can be edited but never removed.
               if (node.step != null || isEmailStep || isScheduleStep)
                 InkWell(
-                  onTap: () => _editStep(node),
+                  onTap: () => _viewStep(node),
                   child: const Padding(
                     padding: EdgeInsets.all(4),
                     child: Icon(Icons.edit_outlined, size: 15, color: SelmsColors.textSecondary),
@@ -1016,7 +1076,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               ),
             ] else ...[
               InkWell(
-                onTap: () => _editStep(node),
+                onTap: () => _viewStep(node),
                 child: const Padding(
                   padding: EdgeInsets.all(4),
                   child: Icon(Icons.edit_outlined, size: 15, color: SelmsColors.textSecondary),
@@ -1032,6 +1092,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             ],
           ],
         ),
+      ),
       ),
     );
   }
@@ -1111,7 +1172,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 if (_selectedEmployee != null) ...[
                   if (_selectedEmployee!['onboarding_started'] != true) ...[
                     ElevatedButton.icon(
-                      onPressed: _startingOnboarding ? null : _startOnboardingAuto,
+                      onPressed: (_startingOnboarding || !_allViewed) ? null : _startOnboardingAuto,
                       icon: _startingOnboarding
                           ? const SizedBox(
                               width: 14, height: 14,
@@ -1127,7 +1188,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     ),
                     const SizedBox(width: 10),
                   ],
-                  if (_selectedEmployee!['onboarding_started'] == true) ...[
+                  if (_selectedEmployee!['onboarding_started'] == true && !_selectedCompleted) ...[
                     OutlinedButton.icon(
                       onPressed: _cancellingOnboarding ? null : _cancelOnboardingFlow,
                       icon: _cancellingOnboarding
@@ -1459,7 +1520,7 @@ class _EmailStepDialogState extends State<_EmailStepDialog> {
       final message = await _api.saveOnboardingEmail(
           widget.employeeId, _subjectCtrl.text.trim(), _bodyCtrl.text.trim());
       if (!mounted) return;
-      Navigator.of(context).pop();
+      Navigator.of(context).pop(true);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
     } catch (e) {
       if (!mounted) return;

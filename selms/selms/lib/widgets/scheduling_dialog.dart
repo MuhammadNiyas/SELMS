@@ -7,7 +7,7 @@
 // booked that day so the suggestion isn't a black box, and lets HR accept
 // it or pick something else. HR names the session and chooses who attends -
 // any number of employees and HR / IT staff, who all get the invite.
-// Sessions run between 10:00 AM and 5:00 PM.
+// Sessions run within the working hours HR sets on Smart Schedule.
 
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -17,9 +17,6 @@ import 'employee_avatar.dart';
 import 'flow_step_editors.dart';
 import '../models/onboarding_flow_node.dart';
 
-/// The working day sessions can be booked in (10:00 AM - 5:00 PM).
-const kScheduleDayStartMinutes = 10 * 60;
-const kScheduleDayEndMinutes = 17 * 60;
 const _sessionMinutes = 30;
 
 class SchedulingDialog extends StatefulWidget {
@@ -104,9 +101,43 @@ class _SchedulingDialogState extends State<SchedulingDialog> {
 
   bool get _planMode => widget.planNode != null;
 
+  // The working day sessions can be booked in (minutes), set by HR.
+  int _dayStart = 10 * 60;
+  int _dayEnd = 17 * 60;
+  // The working days, 0 = Monday ... 6 = Sunday, including those between.
+  int _firstDay = 0;
+  int _lastDay = 4;
+
+  String get _daysText {
+    const names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    return _firstDay == _lastDay ? names[_firstDay] : '${names[_firstDay]} to ${names[_lastDay]}';
+  }
+
+  String _clock(int minutes) {
+    final h = (minutes ~/ 60) % 24;
+    final h12 = h % 12 == 0 ? 12 : h % 12;
+    return '$h12:${(minutes % 60).toString().padLeft(2, '0')} ${h >= 12 ? 'PM' : 'AM'}';
+  }
+
+  Future<void> _loadWorkingHours() async {
+    try {
+      final hours = await _api.getWorkingHours();
+      if (!mounted) return;
+      setState(() {
+        _dayStart = hours['start_minutes'] as int;
+        _dayEnd = hours['end_minutes'] as int;
+        _firstDay = hours['first_day'] as int;
+        _lastDay = hours['last_day'] as int;
+      });
+    } catch (_) {
+      // Non-fatal: the backend still checks the hours when booking.
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _loadWorkingHours();
     _locationCtrl.text = widget.defaultLocation ?? '';
     _titleCtrl.addListener(() => setState(() {}));
     if (_planMode) {
@@ -197,17 +228,20 @@ class _SchedulingDialogState extends State<SchedulingDialog> {
   bool _isOwnBooking(Map<String, dynamic> b) =>
       _planMode && b['employee_id'] == widget.employeeId && b['session_type'] == widget.sessionType;
 
-  /// Uses [day] at [hhmm] if it is a weekday, within 10 AM - 5 PM and clashes
+  /// Uses [day] at [hhmm] if it is a working day, within the working hours and clashes
   /// with nothing; otherwise says why and keeps the current slot. True if used.
   Future<bool> _trySlot(DateTime day, String hhmm) async {
     final parts = hhmm.split(':');
     final startMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
-    if (day.weekday > DateTime.friday) {
-      setState(() => _error = 'Sessions run Monday to Friday - pick a weekday.');
+    await _loadWorkingHours();
+    if (!mounted) return false;
+    if (day.weekday - 1 < _firstDay || day.weekday - 1 > _lastDay) {
+      setState(() => _error = 'Sessions run $_daysText - pick another day.');
       return false;
     }
-    if (startMinutes < kScheduleDayStartMinutes || startMinutes + _sessionMinutes > kScheduleDayEndMinutes) {
-      setState(() => _error = 'Sessions run between 10:00 AM and 5:00 PM — pick a start time from 10:00 AM to 4:30 PM.');
+    if (startMinutes < _dayStart || startMinutes + _sessionMinutes > _dayEnd) {
+      setState(() => _error = 'Sessions run between ${_clock(_dayStart)} and ${_clock(_dayEnd)} — '
+          'pick a start time from ${_clock(_dayStart)} to ${_clock(_dayEnd - _sessionMinutes)}.');
       return false;
     }
     final dateStr =
@@ -442,8 +476,8 @@ class _SchedulingDialogState extends State<SchedulingDialog> {
                       children: [
                         Text(_titleCtrl.text.trim().isEmpty ? 'New session' : _titleCtrl.text.trim(),
                             style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: SelmsColors.textPrimary)),
-                        const Text('Sessions run 10:00 AM – 5:00 PM',
-                            style: TextStyle(fontSize: 11, color: SelmsColors.textMuted)),
+                        Text('Sessions run ${_clock(_dayStart)} – ${_clock(_dayEnd)}',
+                            style: const TextStyle(fontSize: 11, color: SelmsColors.textMuted)),
                       ],
                     ),
                   ),

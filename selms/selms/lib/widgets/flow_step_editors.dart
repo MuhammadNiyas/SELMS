@@ -12,7 +12,6 @@ import '../models/onboarding_flow_node.dart';
 import '../services/api_client.dart';
 import '../theme/selms_colors.dart';
 import 'employee_avatar.dart';
-import 'scheduling_dialog.dart' show PeoplePickerDialog;
 
 String _newId() => DateTime.now().microsecondsSinceEpoch.toString();
 
@@ -56,7 +55,7 @@ Future<bool> editStepNode(BuildContext context, ApiClient api, OnboardingFlowNod
   if (node.step == 'notification') {
     final cfg = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (_) => _NotificationEditor(api: api, initial: node.notify),
+      builder: (_) => _NotificationEditor(initial: node.notify),
     );
     if (cfg == null) return false;
     node.notify = cfg;
@@ -78,6 +77,50 @@ Future<bool> editStepNode(BuildContext context, ApiClient api, OnboardingFlowNod
     return true;
   }
   return false;
+}
+
+/// View-only window for a step with no editor of its own, such as Prepare IT
+/// equipment. True once HR has seen it.
+Future<bool> showStepPreview(
+    BuildContext context, ApiClient api, String process, String employeeId, OnboardingFlowNode node) async {
+  final Map<String, dynamic> preview;
+  try {
+    preview = await api.getStepPreview(process, employeeId, node.id);
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.toString()), backgroundColor: SelmsColors.rose));
+    }
+    return false;
+  }
+  if (!context.mounted) return false;
+  final when = preview['when'] as String?;
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: Colors.white,
+      title: Text(node.label, style: const TextStyle(fontSize: 15)),
+      content: SizedBox(
+        width: 380,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final line in ((preview['lines'] as List?) ?? const []).cast<String>())
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(line, style: const TextStyle(fontSize: 13, color: SelmsColors.textPrimary, height: 1.4)),
+              ),
+            if (when != null) Text(when, style: const TextStyle(fontSize: 12, color: SelmsColors.textSecondary)),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Close')),
+      ],
+    ),
+  );
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -606,7 +649,7 @@ class _WhenDialogState extends State<_WhenDialog> {
 
   String get _explain => switch (widget.kind) {
         'meeting' =>
-          'Pick the day and time for the session (10 AM - 5 PM, Mon - Fri). If it clashes with another session you will be asked to pick another. Immediately = the first free slot from now.',
+          'Pick the day and time for the session (within working hours). If it clashes with another session you will be asked to pick another. Immediately = the first free slot from now.',
         'reminder' => 'HR is reminded at this day and time. You can still send it earlier.',
         _ => '',
       };
@@ -810,15 +853,13 @@ String _recipientsText(Map<String, dynamic> cfg) {
     if (to['employee'] == true) 'the employee',
     if (to['it'] == true) 'IT',
     if (to['hr'] == true) 'HR',
-    for (final p in (cfg['people'] as List? ?? const [])) (p as Map)['name'] as String? ?? 'someone',
   ];
   return parts.isEmpty ? 'no one yet' : parts.join(', ');
 }
 
 class _NotificationEditor extends StatefulWidget {
-  const _NotificationEditor({required this.api, required this.initial});
+  const _NotificationEditor({required this.initial});
 
-  final ApiClient api;
   final Map<String, dynamic>? initial;
 
   @override
@@ -831,9 +872,6 @@ class _NotificationEditorState extends State<_NotificationEditor> {
   late bool _employee = ((widget.initial?['to'] as Map?)?['employee'] ?? true) == true;
   late bool _it = ((widget.initial?['to'] as Map?)?['it'] ?? false) == true;
   late bool _hr = ((widget.initial?['to'] as Map?)?['hr'] ?? false) == true;
-  late final List<Map<String, dynamic>> _people = [
-    for (final p in (widget.initial?['people'] as List? ?? const [])) Map<String, dynamic>.from(p as Map),
-  ];
   String? _error;
 
   @override
@@ -843,32 +881,16 @@ class _NotificationEditorState extends State<_NotificationEditor> {
     super.dispose();
   }
 
-  Future<void> _addPeople() async {
-    final picked = await showDialog<List<Map<String, dynamic>>>(
-      context: context,
-      builder: (_) => PeoplePickerDialog(
-        api: widget.api,
-        apiBaseUrl: widget.api.baseUrl,
-        selected: List.of(_people),
-        title: 'Send to specific people',
-      ),
-    );
-    if (picked == null || !mounted) return;
-    setState(() {
-      _people
-        ..clear()
-        ..addAll([
-          for (final p in picked) {'id': p['id'], 'name': p['name'], 'role': p['role']},
-        ]);
-    });
-  }
-
   void _save() {
     if (_title.text.trim().isEmpty) {
       setState(() => _error = 'Give the notification a title.');
       return;
     }
-    if (!_employee && !_it && !_hr && _people.isEmpty) {
+    if (_message.text.trim().isEmpty) {
+      setState(() => _error = 'Type a message.');
+      return;
+    }
+    if (!_employee && !_it && !_hr) {
       setState(() => _error = 'Choose who should get it.');
       return;
     }
@@ -876,7 +898,6 @@ class _NotificationEditorState extends State<_NotificationEditor> {
       'title': _title.text.trim(),
       'message': _message.text.trim(),
       'to': {'employee': _employee, 'it': _it, 'hr': _hr},
-      'people': _people,
     });
   }
 
@@ -905,9 +926,6 @@ class _NotificationEditorState extends State<_NotificationEditor> {
             children: [
               const Text('Send notification',
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: SelmsColors.textPrimary)),
-              const SizedBox(height: 4),
-              const Text('SELMS sends this to their bell by itself when the step comes up (or on its date).',
-                  style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
               const SizedBox(height: 12),
               Flexible(
                 child: SingleChildScrollView(
@@ -926,8 +944,6 @@ class _NotificationEditorState extends State<_NotificationEditor> {
                         decoration: const InputDecoration(
                           labelText: 'Message',
                           isDense: true,
-                          helperText: 'You can use {name}, {department}, {job_title}, {employee_id} and {hire_date}.',
-                          helperMaxLines: 2,
                         ),
                         style: const TextStyle(fontSize: 13),
                       ),
@@ -936,43 +952,10 @@ class _NotificationEditorState extends State<_NotificationEditor> {
                           style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: SelmsColors.textSecondary)),
                       const SizedBox(height: 6),
                       Wrap(spacing: 8, runSpacing: 6, children: [
-                        _toChip('The employee', _employee, (v) => _employee = v),
-                        _toChip('IT', _it, (v) => _it = v),
+                        _toChip('Employee', _employee, (v) => _employee = v),
                         _toChip('HR', _hr, (v) => _hr = v),
+                        _toChip('IT', _it, (v) => _it = v),
                       ]),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          const Expanded(
-                            child: Text('Specific people',
-                                style: TextStyle(
-                                    fontSize: 12, fontWeight: FontWeight.w600, color: SelmsColors.textSecondary)),
-                          ),
-                          TextButton.icon(
-                            onPressed: _addPeople,
-                            icon: const Icon(Icons.person_add_alt_1_outlined, size: 15),
-                            label: Text(_people.isEmpty ? 'Pick people' : 'Change', style: const TextStyle(fontSize: 12)),
-                          ),
-                        ],
-                      ),
-                      if (_people.isEmpty)
-                        const Text('No one picked. Optional: a buddy, a manager, anyone.',
-                            style: TextStyle(fontSize: 11.5, color: SelmsColors.textMuted))
-                      else
-                        Wrap(spacing: 6, runSpacing: 6, children: [
-                          for (final p in _people)
-                            Chip(
-                              label: Text(p['name'] as String? ?? '', style: const TextStyle(fontSize: 12)),
-                              onDeleted: () => setState(() => _people.remove(p)),
-                              visualDensity: VisualDensity.compact,
-                              backgroundColor: SelmsColors.accentBg,
-                              side: BorderSide.none,
-                            ),
-                        ]),
-                      const SizedBox(height: 6),
-                      const Text(
-                          'HR and IT staff share one inbox per team, so picking a person from HR or IT reaches that team.',
-                          style: TextStyle(fontSize: 10.5, color: SelmsColors.textMuted)),
                     ],
                   ),
                 ),
@@ -1096,8 +1079,6 @@ class _EmailEditorState extends State<_EmailEditor> {
                         decoration: const InputDecoration(
                           labelText: 'Message',
                           alignLabelWithHint: true,
-                          helperText: 'You can use {name}, {department}, {job_title}, {employee_id} and {hire_date}.',
-                          helperMaxLines: 2,
                         ),
                         style: const TextStyle(fontSize: 13),
                       ),
@@ -1106,14 +1087,10 @@ class _EmailEditorState extends State<_EmailEditor> {
                           style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: SelmsColors.textSecondary)),
                       const SizedBox(height: 6),
                       Wrap(spacing: 8, runSpacing: 6, children: [
-                        _toChip('The employee', _employee, (v) => _employee = v),
-                        _toChip('IT team', _it, (v) => _it = v),
-                        _toChip('HR team', _hr, (v) => _hr = v),
+                        _toChip('Employee', _employee, (v) => _employee = v),
+                        _toChip('HR', _hr, (v) => _hr = v),
+                        _toChip('IT', _it, (v) => _it = v),
                       ]),
-                      const SizedBox(height: 6),
-                      const Text(
-                          'The employee is the person chosen at the top of the page. Only these three can be picked.',
-                          style: TextStyle(fontSize: 10.5, color: SelmsColors.textMuted)),
                     ],
                   ),
                 ),

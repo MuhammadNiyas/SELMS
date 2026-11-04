@@ -59,6 +59,7 @@ for rec in dump.get("flow_documents", []):
 print("bookings:", db.bookings.delete_many({}).deleted_count)
 print("shipments:", db.shipments.delete_many({}).deleted_count)
 print("notifications:", db.notifications.delete_many({}).deleted_count)
+print("password reset codes:", db.password_resets.delete_many({}).deleted_count)
 print("system request cards:", db.messages.delete_many({"sender_role": "system"}).deleted_count)
 print("employees' own onboarding flows:", db.onboarding_flows.delete_many({"_id": {"$ne": "template"}}).deleted_count)
 print("employees' own offboarding flows:", db.offboarding_flows.delete_many({"_id": {"$ne": "template"}}).deleted_count)

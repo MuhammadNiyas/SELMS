@@ -36,11 +36,68 @@ class SmartScheduleScreen extends StatefulWidget {
 class _SmartScheduleScreenState extends State<SmartScheduleScreen> {
   late final ApiClient _api = ApiClient(baseUrl: widget.apiBaseUrl, hrToken: widget.hrToken);
 
-  // Sessions run 10:00 AM - 5:00 PM (same as the booking rules).
-  static const int _dayStartHour = 10;
-  static const int _dayEndHour = 17;
-  // Pixels per hour - recomputed from the space available so the 10 AM - 5 PM
-  // grid fills the card instead of leaving a long empty area under it.
+  // The working day HR has set (minutes), same as the booking rules.
+  int _hoursStart = 10 * 60;
+  int _hoursEnd = 17 * 60;
+  // The working days set by HR: 0 = Monday ... 6 = Sunday, including those between.
+  int _firstDay = 0;
+  int _lastDay = 4;
+
+  static const _dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  static const _dayShort = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  String get _daysLabel =>
+      _firstDay == _lastDay ? _dayNames[_firstDay] : '${_dayNames[_firstDay]} to ${_dayNames[_lastDay]}';
+
+  int _bookingDay(Map<String, dynamic> b) => DateTime.parse(b['date'] as String).weekday - 1;
+
+  // The columns shown: the working days, stretched for this week's sessions
+  // booked before the days were changed, so none of them disappear.
+  int get _gridFirstDay {
+    var first = _firstDay;
+    for (final b in _bookings) {
+      if (_bookingDay(b) < first) first = _bookingDay(b);
+    }
+    return first;
+  }
+
+  int get _gridLastDay {
+    var last = _lastDay;
+    for (final b in _bookings) {
+      if (_bookingDay(b) > last) last = _bookingDay(b);
+    }
+    return last;
+  }
+
+  int _bookingStart(Map<String, dynamic> b) {
+    final p = (b['start_time'] as String).split(':');
+    return int.parse(p[0]) * 60 + int.parse(p[1]);
+  }
+
+  // The grid covers the working day, and stretches for this week's sessions
+  // booked before the hours were changed, so none of them disappear.
+  int get _dayStartHour {
+    var first = _hoursStart;
+    for (final b in _bookings) {
+      final start = _bookingStart(b);
+      if (start < first) first = start;
+    }
+    return first ~/ 60;
+  }
+
+  int get _dayEndHour {
+    var last = _hoursEnd;
+    for (final b in _bookings) {
+      final end = _bookingStart(b) + (b['duration_minutes'] as int? ?? 30);
+      if (end > last) last = end;
+    }
+    return (last + 59) ~/ 60;
+  }
+
+  String get _hoursLabel => '${_formatHour(_hoursStart ~/ 60)} – ${_formatHour(_hoursEnd ~/ 60)}';
+
+  // Pixels per hour - recomputed from the space available so the grid fills
+  // the card instead of leaving a long empty area under it.
   double _hourHeight = 56;
   static const double _minHourHeight = 48;
 
@@ -70,7 +127,6 @@ class _SmartScheduleScreenState extends State<SmartScheduleScreen> {
     _load();
   }
 
-  DateTime get _weekFriday => _weekMonday.add(const Duration(days: 4));
 
   Future<void> _load() async {
     setState(() {
@@ -78,10 +134,21 @@ class _SmartScheduleScreenState extends State<SmartScheduleScreen> {
       _error = null;
     });
     try {
-      final bookings = await _api.listBookings(start: _weekMonday, end: _weekFriday);
+      final bookings = await _api.listBookings(start: _weekMonday, end: _weekMonday.add(const Duration(days: 6)));
+      var hours = {
+        'start_minutes': _hoursStart,
+        'end_minutes': _hoursEnd,
+        'first_day': _firstDay,
+        'last_day': _lastDay,
+      } as Map<String, dynamic>;
+      try {
+        hours = await _api.getWorkingHours();
+      } catch (_) {
+        // Non-fatal: keep the hours last known.
+      }
       var sends = <Map<String, dynamic>>[];
       try {
-        // Monday to Sunday: weekend items are shown in Friday's cell. HR sees what
+        // Monday to Sunday: items on a day that isn't shown go in the nearest column. HR sees what
         // the flows send; IT sees its own tasks (equipment to assign / retrieve, parcels).
         final sunday = _weekMonday.add(const Duration(days: 6));
         sends = widget.forIt
@@ -94,6 +161,10 @@ class _SmartScheduleScreenState extends State<SmartScheduleScreen> {
       setState(() {
         _bookings = bookings;
         _sends = sends;
+        _hoursStart = hours['start_minutes'] as int;
+        _hoursEnd = hours['end_minutes'] as int;
+        _firstDay = hours['first_day'] as int;
+        _lastDay = hours['last_day'] as int;
         _loading = false;
       });
     } catch (e) {
@@ -103,6 +174,103 @@ class _SmartScheduleScreenState extends State<SmartScheduleScreen> {
         _loading = false;
       });
     }
+  }
+
+  /// HR: the "Working hours" line under the title - one start and end time, from one day to another.
+  Future<void> _openWorkingHours() async {
+    var start = _hoursStart ~/ 60;
+    var end = _hoursEnd ~/ 60;
+    var firstDay = _firstDay;
+    var lastDay = _lastDay;
+    String? error;
+    var saving = false;
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) {
+          Widget picker(String label, int value, int from, int to, String Function(int) text,
+                  ValueChanged<int> onChanged) =>
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, style: const TextStyle(fontSize: 12, color: SelmsColors.textSecondary)),
+                  const SizedBox(height: 6),
+                  DropdownButtonFormField<int>(
+                    initialValue: value,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                    ),
+                    items: [
+                      for (var h = from; h <= to; h++)
+                        DropdownMenuItem(value: h, child: Text(text(h), style: const TextStyle(fontSize: 13))),
+                    ],
+                    onChanged: (v) => setD(() {
+                      if (v != null) onChanged(v);
+                      error = null;
+                    }),
+                  ),
+                ],
+              );
+          return AlertDialog(
+            backgroundColor: Colors.white,
+            title: const Text('Working hours', style: TextStyle(fontSize: 15)),
+            content: SizedBox(
+              width: 280,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  picker('Start', start, 0, 23, _formatHour, (v) => start = v),
+                  const SizedBox(height: 12),
+                  picker('End', end, 1, 24, _formatHour, (v) => end = v),
+                  const SizedBox(height: 12),
+                  picker('From', firstDay, 0, 6, (d) => _dayNames[d], (v) => firstDay = v),
+                  const SizedBox(height: 12),
+                  picker('To', lastDay, 0, 6, (d) => _dayNames[d], (v) => lastDay = v),
+                  if (error != null) ...[
+                    const SizedBox(height: 10),
+                    Text(error!, style: const TextStyle(fontSize: 12, color: SelmsColors.rose)),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+              ElevatedButton(
+                onPressed: saving
+                    ? null
+                    : () async {
+                        if (end <= start) {
+                          setD(() => error = 'The end time must be after the start time.');
+                          return;
+                        }
+                        if (lastDay < firstDay) {
+                          setD(() => error = 'The last day must be on or after the first day.');
+                          return;
+                        }
+                        setD(() => saving = true);
+                        try {
+                          await _api.saveWorkingHours(start * 60, end * 60, firstDay, lastDay);
+                          if (ctx.mounted) Navigator.of(ctx).pop(true);
+                        } catch (e) {
+                          setD(() {
+                            saving = false;
+                            error = e.toString();
+                          });
+                        }
+                      },
+                style: ElevatedButton.styleFrom(backgroundColor: SelmsColors.ink, foregroundColor: Colors.white),
+                child: const Text('Save'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (saved == true && mounted) _load();
   }
 
   Future<void> _loadGoogleStatus() async {
@@ -285,22 +453,26 @@ class _SmartScheduleScreenState extends State<SmartScheduleScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Title row
-            const Row(
+            Row(
               children: [
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Smart Schedule',
+                      const Text('Smart Schedule',
                           style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: SelmsColors.textPrimary)),
-                      Text('Working hours 10:00 AM – 5:00 PM · Monday to Friday',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 12.5, color: SelmsColors.textSecondary)),
+                      // HR clicks this line to change the hours; IT only reads it.
+                      InkWell(
+                        onTap: widget.forIt ? null : _openWorkingHours,
+                        child: Text('Working hours $_hoursLabel · $_daysLabel',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 12.5, color: SelmsColors.textSecondary)),
+                      ),
                     ],
                   ),
                 ),
-                TopBarActions(),
+                const TopBarActions(),
               ],
             ),
             const SizedBox(height: 14),
@@ -367,8 +539,9 @@ class _SmartScheduleScreenState extends State<SmartScheduleScreen> {
 
   String _formatRange() {
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    final start = _weekMonday;
-    final end = _weekFriday;
+    final start = _weekMonday.add(Duration(days: _gridFirstDay));
+    final end = _weekMonday.add(Duration(days: _gridLastDay));
+    if (start == end) return '${start.day} ${months[start.month - 1]} ${start.year}';
     if (start.month == end.month) {
       return '${start.day}–${end.day} ${months[start.month - 1]} ${start.year}';
     }
@@ -381,8 +554,7 @@ class _SmartScheduleScreenState extends State<SmartScheduleScreen> {
       return Center(child: Text(_error!, style: const TextStyle(color: SelmsColors.rose, fontSize: 13)));
     }
 
-    final days = List.generate(5, (i) => _weekMonday.add(Duration(days: i)));
-    const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    final days = [for (var i = _gridFirstDay; i <= _gridLastDay; i++) _weekMonday.add(Duration(days: i))];
     final hours = List.generate(_dayEndHour - _dayStartHour, (i) => _dayStartHour + i);
 
     return Container(
@@ -393,7 +565,7 @@ class _SmartScheduleScreenState extends State<SmartScheduleScreen> {
           Row(
             children: [
               const SizedBox(width: 64),
-              ...List.generate(5, (i) {
+              ...List.generate(days.length, (i) {
                 final isToday = _isToday(days[i]);
                 return Expanded(
                   child: Container(
@@ -404,7 +576,7 @@ class _SmartScheduleScreenState extends State<SmartScheduleScreen> {
                     ),
                     child: Column(
                       children: [
-                        Text(dayLabels[i],
+                        Text(_dayShort[days[i].weekday - 1],
                             style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,
@@ -425,7 +597,7 @@ class _SmartScheduleScreenState extends State<SmartScheduleScreen> {
           const Divider(height: 1, color: SelmsColors.border),
           Expanded(
             child: LayoutBuilder(builder: (context, c) {
-              const bottomPad = 14.0; // room for the "5 PM" label under the last line
+              const bottomPad = 14.0; // room for the last time label under the last line
               _hourHeight = ((c.maxHeight - bottomPad) / hours.length).clamp(_minHourHeight, 140).toDouble();
               final gridHeight = hours.length * _hourHeight;
               return SingleChildScrollView(
@@ -434,7 +606,7 @@ class _SmartScheduleScreenState extends State<SmartScheduleScreen> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // time labels on every hour line, 10 AM down to 5 PM
+                      // time labels on every hour line
                       SizedBox(
                         width: 64,
                         height: gridHeight + bottomPad,
@@ -450,7 +622,7 @@ class _SmartScheduleScreenState extends State<SmartScheduleScreen> {
                           ],
                         ),
                       ),
-                      ...List.generate(5, (i) => Expanded(child: _dayColumn(days[i]))),
+                      ...List.generate(days.length, (i) => Expanded(child: _dayColumn(days[i]))),
                     ],
                   ),
                 ),
@@ -471,13 +643,13 @@ class _SmartScheduleScreenState extends State<SmartScheduleScreen> {
   static const double _sendItemHeight = 38;
   static const int _sendRowsVisible = 4;
 
-  /// This day's sends; Friday also gets Saturday's and Sunday's (the grid has no weekend).
+  /// This day's sends; items on a day that isn't shown go in the nearest column.
   List<Map<String, dynamic>> _sendsFor(DateTime day) {
-    final keys = {_dateKey(day)};
-    if (day.weekday == DateTime.friday) {
-      keys.addAll([_dateKey(day.add(const Duration(days: 1))), _dateKey(day.add(const Duration(days: 2)))]);
-    }
-    return _sends.where((s) => keys.contains(s['date'])).toList();
+    final column = day.weekday - 1;
+    return _sends.where((s) {
+      final d = DateTime.parse(s['date'] as String).weekday - 1;
+      return d.clamp(_gridFirstDay, _gridLastDay) == column;
+    }).toList();
   }
 
   String _time12(String hhmm) {
@@ -486,10 +658,11 @@ class _SmartScheduleScreenState extends State<SmartScheduleScreen> {
     return '${h % 12 == 0 ? 12 : h % 12}:${p[1]} ${h >= 12 ? 'PM' : 'AM'}';
   }
 
-  /// "10:05 AM · Ali" (weekend items in Friday's box get "Sat " / "Sun " in front).
+  /// "10:05 AM · Ali" (items from a day that isn't shown get "Sat " etc. in front).
   String _sendWhenWho(Map<String, dynamic> s) {
     final d = DateTime.parse(s['date'] as String);
-    final day = d.weekday == DateTime.saturday ? 'Sat ' : (d.weekday == DateTime.sunday ? 'Sun ' : '');
+    final i = d.weekday - 1;
+    final day = i < _gridFirstDay || i > _gridLastDay ? '${_dayShort[i]} ' : '';
     final time = s['time'] as String?;
     return '$day${time == null ? 'Start of day' : _time12(time)} · ${s['employee_name']}';
   }
@@ -642,7 +815,7 @@ class _SmartScheduleScreenState extends State<SmartScheduleScreen> {
             left: 0,
             right: 0,
             bottom: 0,
-            child: Container(height: 1, color: const Color(0xFFE9ECEF)), // 5 PM
+            child: Container(height: 1, color: const Color(0xFFE9ECEF)), // end of the day
           ),
           ...dayBookings.map((b) => _bookingBlock(b)),
         ],
@@ -651,8 +824,7 @@ class _SmartScheduleScreenState extends State<SmartScheduleScreen> {
   }
 
   Widget _bookingBlock(Map<String, dynamic> b) {
-    final startParts = (b['start_time'] as String).split(':');
-    final startMinutes = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
+    final startMinutes = _bookingStart(b);
     final dayStartMinutes = _dayStartHour * 60;
     final top = ((startMinutes - dayStartMinutes) / 60) * _hourHeight;
     final durationMinutes = b['duration_minutes'] as int? ?? 30;
@@ -745,7 +917,7 @@ class _SmartScheduleScreenState extends State<SmartScheduleScreen> {
   }
 
   String _formatHour(int h) {
-    final period = h >= 12 ? 'PM' : 'AM';
+    final period = h >= 12 && h < 24 ? 'PM' : 'AM';
     final h12 = h % 12 == 0 ? 12 : h % 12;
     return '$h12:00 $period';
   }

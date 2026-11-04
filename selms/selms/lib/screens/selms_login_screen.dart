@@ -14,6 +14,7 @@ import 'package:http/http.dart' as http;
 import '../theme/selms_colors.dart';
 import 'dashboard_screen.dart';
 import 'it_dashboard_screen.dart';
+import 'employee_forgot_password_screen.dart';
 import 'employee_home_screen.dart';
 import 'employee_set_password_screen.dart';
 
@@ -291,6 +292,19 @@ class _SelmsLoginScreenState extends State<SelmsLoginScreen> {
             ),
           ),
         ),
+        if (_role == SelmsRole.employee)
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => EmployeeForgotPasswordScreen(
+                  apiBaseUrl: widget.apiBaseUrl,
+                  initialEmail: _emailCtrl.text.trim(),
+                ),
+              )),
+              child: const Text('Forgot password?', style: TextStyle(fontSize: 12, color: SelmsColors.ink)),
+            ),
+          ),
         if (_error != null) ...[
           const SizedBox(height: 14),
           Container(

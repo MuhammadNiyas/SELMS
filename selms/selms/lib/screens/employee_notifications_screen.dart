@@ -38,6 +38,59 @@ class EmployeeNotificationsPanel extends StatefulWidget {
 class _EmployeeNotificationsPanelState extends State<EmployeeNotificationsPanel> {
   late final Future<EmployeeNotifications> _future = _load();
 
+  /// Confirmed since this list opened: id -> when.
+  final _confirmed = <String, String>{};
+  String? _confirming;
+
+  Future<void> _confirm(NotificationItem n) async {
+    setState(() => _confirming = n.confirmId);
+    try {
+      final at = await widget.api.confirmMyNotification(n.confirmId!);
+      if (mounted) setState(() => _confirmed[n.confirmId!] = at);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      if (mounted) setState(() => _confirming = null);
+    }
+  }
+
+  /// "4 Nov, 2:30 PM"
+  String _whenConfirmed(String iso) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final d = DateTime.parse(iso).toLocal();
+    final h = d.hour % 12 == 0 ? 12 : d.hour % 12;
+    return '${d.day} ${months[d.month - 1]}, $h:${d.minute.toString().padLeft(2, '0')} ${d.hour >= 12 ? 'PM' : 'AM'}';
+  }
+
+  /// The "I got it" button, or when it was confirmed.
+  Widget _confirmation(NotificationItem n) {
+    final at = _confirmed[n.confirmId] ?? n.confirmedAt;
+    if (at != null) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: Text('✓ Confirmed, ${_whenConfirmed(at)}',
+            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: EmpColors.success)),
+      );
+    }
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: ElevatedButton(
+          onPressed: _confirming == null ? () => _confirm(n) : null,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: SelmsColors.ink,
+            foregroundColor: Colors.white,
+            elevation: 0,
+            visualDensity: VisualDensity.compact,
+            textStyle: const TextStyle(fontSize: 12),
+          ),
+          child: const Text('I got it'),
+        ),
+      ),
+    );
+  }
+
   Future<EmployeeNotifications> _load() async {
     final data = await widget.api.getMyNotifications();
     if (data.unreadCount > 0) {
@@ -89,6 +142,7 @@ class _EmployeeNotificationsPanelState extends State<EmployeeNotificationsPanel>
                       style: const TextStyle(fontSize: 11.5, color: SelmsColors.textSecondary, height: 1.35)),
                   const SizedBox(height: 3),
                   Text(empRelative(n.at), style: const TextStyle(fontSize: 10.5, color: SelmsColors.textMuted)),
+                  if (n.confirmId != null) _confirmation(n),
                 ],
               ),
             ),

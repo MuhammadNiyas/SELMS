@@ -11,6 +11,7 @@ import '../models/employee.dart';
 import '../services/api_client.dart';
 import '../theme/selms_colors.dart';
 import '../widgets/app_shell.dart';
+import '../widgets/employee_card.dart';
 import 'add_employee_screen.dart';
 import 'employee_view_screen.dart';
 
@@ -378,9 +379,15 @@ class _EmployeeDirectoryScreenState extends State<EmployeeDirectoryScreen> {
         childAspectRatio: 2.4,
       ),
       itemCount: _employees.length,
-      itemBuilder: (context, i) => _EmployeeCard(
-        employee: _employees[i],
+      itemBuilder: (context, i) => EmployeeCard(
         apiBaseUrl: widget.apiBaseUrl,
+        name: _employees[i].fullName,
+        employeeId: _employees[i].employeeId,
+        photoUrl: _employees[i].profileImageUrl,
+        jobTitle: _employees[i].jobTitle,
+        department: _employees[i].department,
+        workEmail: _employees[i].workEmail,
+        mobileNumber: _employees[i].mobileNumber,
         onTap: () async {
           final changed = await Navigator.of(context).push<bool>(
             MaterialPageRoute(
@@ -393,98 +400,6 @@ class _EmployeeDirectoryScreenState extends State<EmployeeDirectoryScreen> {
           );
           if (changed == true) _load();
         },
-      ),
-    );
-  }
-}
-
-class _EmployeeCard extends StatelessWidget {
-  const _EmployeeCard({required this.employee, required this.apiBaseUrl, required this.onTap});
-
-  final Employee employee;
-  final String apiBaseUrl;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 38,
-                  height: 38,
-                  clipBehavior: Clip.hardEdge,
-                  decoration: const BoxDecoration(color: SelmsColors.accentBg, shape: BoxShape.circle),
-                  alignment: Alignment.center,
-                  child: (employee.profileImageUrl != null && employee.profileImageUrl!.isNotEmpty)
-                      ? Image.network('${apiBaseUrl}${employee.profileImageUrl}',
-                          fit: BoxFit.cover, width: 38, height: 38)
-                      : Text(employee.initials,
-                          style: const TextStyle(
-                              fontSize: 12, fontWeight: FontWeight.w600, color: SelmsColors.ink)),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(employee.fullName,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 13.5, fontWeight: FontWeight.w500, color: SelmsColors.textPrimary)),
-                      Text(employee.jobTitle ?? '',
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text('${employee.employeeId} · ${employee.department ?? ''}',
-                style: const TextStyle(fontSize: 11.5, color: SelmsColors.textMuted)),
-            const Spacer(),
-            Row(
-              children: [
-                _iconButton(Icons.mail_outline, () {
-                  if (employee.workEmail != null) {
-                    launchUrl(Uri.parse('mailto:${employee.workEmail}'));
-                  }
-                }),
-                const SizedBox(width: 8),
-                _iconButton(Icons.call_outlined, () {
-                  if (employee.mobileNumber != null) {
-                    launchUrl(Uri.parse('tel:${employee.mobileNumber}'));
-                  }
-                }),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _iconButton(IconData icon, VoidCallback onTap) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(13),
-      child: Container(
-        width: 26,
-        height: 26,
-        decoration: const BoxDecoration(color: Color(0xFFF3F4F6), shape: BoxShape.circle),
-        child: Icon(icon, size: 13, color: const Color(0xFF6B7280)),
       ),
     );
   }

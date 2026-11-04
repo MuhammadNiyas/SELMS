@@ -9,6 +9,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../services/api_client.dart';
 import '../theme/selms_colors.dart';
+import '../utils/employee_rules.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/form_fields.dart';
 import 'review_employee_screen.dart';
@@ -150,10 +151,23 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
     if (_equipmentOptions.isNotEmpty && _equipment.isEmpty) {
       return 'Please fill in every field before continuing.';
     }
-    if (num.tryParse(_baseSalary.text.replaceAll(',', '').trim()) == null) {
-      return 'Base salary must be a valid number.';
-    }
-    return null;
+    return employeeDetailsProblem(
+      fullName: _name.text,
+      dateOfBirth: _dob,
+      nationality: _nationality.text,
+      icPassport: _icPassport.text,
+      personalEmail: _personalEmail.text,
+      workEmail: _workEmail.text,
+      mobile: _mobile.text,
+      emergencyPhone: _emergencyPhone.text,
+      postcode: _postcode.text,
+      address: _addressLine.text,
+      jobTitle: _jobTitle.text,
+      lineManager: _lineManager.text,
+      emergencyName: _emergencyName.text,
+      remarks: _remarks.text,
+      baseSalary: num.tryParse(_baseSalary.text.replaceAll(',', '').trim()),
+    );
   }
 
   void _goToReview() {

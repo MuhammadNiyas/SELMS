@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../models/employee.dart';
 import '../services/api_client.dart';
 import '../theme/selms_colors.dart';
+import '../utils/employee_rules.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/form_fields.dart';
 
@@ -159,6 +160,27 @@ class _EmployeeEditScreenState extends State<EmployeeEditScreen> {
   }
 
   Future<void> _save() async {
+    final problem = employeeDetailsProblem(
+      fullName: _name.text,
+      dateOfBirth: _dob,
+      nationality: _nationality.text,
+      icPassport: _icPassport.text,
+      personalEmail: _personalEmail.text,
+      workEmail: _workEmail.text,
+      mobile: _mobile.text,
+      emergencyPhone: _emergencyPhone.text,
+      postcode: _postcode.text,
+      address: _addressLine.text,
+      jobTitle: _jobTitle.text,
+      lineManager: _lineManager.text,
+      emergencyName: _emergencyName.text,
+      remarks: '', // not on this form
+      baseSalary: num.tryParse(_baseSalary.text.replaceAll(',', '').trim()),
+    );
+    if (problem != null) {
+      setState(() => _saveError = problem);
+      return;
+    }
     setState(() {
       _saving = true;
       _saveError = null;

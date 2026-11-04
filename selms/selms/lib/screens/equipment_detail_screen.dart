@@ -9,6 +9,7 @@ import '../models/equipment.dart';
 import '../services/api_client.dart';
 import '../theme/selms_colors.dart';
 import '../widgets/employee_avatar.dart';
+import '../widgets/equipment_photo.dart';
 import '../widgets/form_fields.dart' show SquarePhotoViewDialog;
 import 'edit_equipment_screen.dart';
 
@@ -539,12 +540,11 @@ class ReturnEquipmentDialogState extends State<ReturnEquipmentDialog> {
                 decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(10)),
                 child: Row(
                   children: [
-                    Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(color: SelmsColors.accentBg, borderRadius: BorderRadius.circular(8)),
-                      alignment: Alignment.center,
-                      child: const Icon(Icons.inventory_2_outlined, size: 17, color: SelmsColors.ink),
+                    EquipmentPhoto(
+                      apiBaseUrl: widget.apiBaseUrl,
+                      photoUrl: e.photoUrl,
+                      size: 36,
+                      fallback: const Icon(Icons.inventory_2_outlined, size: 17, color: SelmsColors.ink),
                     ),
                     const SizedBox(width: 10),
                     Expanded(

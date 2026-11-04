@@ -59,6 +59,8 @@ class NotificationItem {
     required this.read,
     this.kind = 'notification',
     this.section,
+    this.confirmId,
+    this.confirmedAt,
   });
 
   final String id;
@@ -70,6 +72,10 @@ class NotificationItem {
   /// onboarding | offboarding | messages, or null - where tapping it goes.
   final String? section;
 
+  /// Set when this one needs "I got it": the id to confirm it with.
+  final String? confirmId;
+  final String? confirmedAt;
+
   factory NotificationItem.fromJson(Map<String, dynamic> j) => NotificationItem(
         id: j['id'] as String,
         title: j['title'] as String,
@@ -78,6 +84,8 @@ class NotificationItem {
         read: j['read'] as bool? ?? false,
         kind: j['kind'] as String? ?? 'notification',
         section: j['section'] as String?,
+        confirmId: j['confirm_id'] as String?,
+        confirmedAt: j['confirmed_at'] as String?,
       );
 }
 

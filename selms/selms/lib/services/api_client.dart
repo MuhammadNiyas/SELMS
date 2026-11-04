@@ -237,15 +237,15 @@ class ApiClient {
     return data['message'] as String;
   }
 
-  /// Saves the reviewed welcome email on the employee's flow. The flow sends it
-  /// when its step comes due (right away, or on the date set in its timing).
-  /// "Review before Start": every step of the employee's flow, in order (read only).
-  Future<Map<String, dynamic>> getStartReview(String process, String employeeId) async {
-    final res = await http.get(Uri.parse('$baseUrl/api/$process/$employeeId/review'), headers: _headers);
+  /// What a step with no window of its own will do: {label, when, lines}.
+  Future<Map<String, dynamic>> getStepPreview(String process, String employeeId, String nodeId) async {
+    final res = await http.get(Uri.parse('$baseUrl/api/$process/$employeeId/step-preview/$nodeId'), headers: _headers);
     if (res.statusCode != 200) throw ApiException(_extractMessage(res));
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
+  /// Saves the reviewed welcome email on the employee's flow. The flow sends it
+  /// when its step comes due (right away, or on the date set in its timing).
   Future<String> saveOnboardingEmail(String employeeId, String subject, String body) async {
     final res = await http.post(
       Uri.parse('$baseUrl/api/onboarding/$employeeId/save-email'),
@@ -807,6 +807,19 @@ class ApiClient {
     return EmployeeNotifications.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
+  /// "I got it" on a notification in the employee's bell. Returns when it was confirmed.
+  Future<String> confirmMyNotification(String id) async {
+    final res = await http.post(Uri.parse('$baseUrl/api/employee/me/notifications/$id/confirm'), headers: _headers);
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    return (jsonDecode(res.body) as Map<String, dynamic>)['confirmed_at'] as String;
+  }
+
+  /// "I got it" on a notification in the HR / IT bell.
+  Future<void> confirmStaffNotification(String id) async {
+    final res = await http.post(Uri.parse('$baseUrl/api/staff/notifications/$id/confirm'), headers: _headers);
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+  }
+
   Future<void> markMyNotificationsRead() async {
     final res = await http.post(
       Uri.parse('$baseUrl/api/employee/me/notifications/mark-read'),
@@ -1211,6 +1224,48 @@ class ApiClient {
     if (res.statusCode != 201) throw ApiException(_extractMessage(res));
   }
 
+  /// Sends a file (and optional text) to a messages route.
+  Future<void> _sendMessageFile(String path, String content, String filename, List<int> bytes) async {
+    final request = http.MultipartRequest('POST', Uri.parse('$baseUrl$path'))
+      ..headers['Authorization'] = 'Bearer $hrToken'
+      ..fields['content'] = content;
+    request.files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+    final res = await http.Response.fromStream(await request.send());
+    if (res.statusCode != 201) throw ApiException(_extractMessage(res));
+  }
+
+  Future<void> sendMyFile(String targetRole, String content, String filename, List<int> bytes) =>
+      _sendMessageFile('/api/employee/me/messages/$targetRole', content, filename, bytes);
+
+  Future<void> sendHrFile(String employeeId, String content, String filename, List<int> bytes) =>
+      _sendMessageFile('/api/hr/messages/$employeeId', content, filename, bytes);
+
+  Future<void> sendItFile(String employeeId, String content, String filename, List<int> bytes) =>
+      _sendMessageFile('/api/it/messages/$employeeId', content, filename, bytes);
+
+  Future<void> sendTeamFile(String content, String filename, List<int> bytes) =>
+      _sendMessageFile('/api/staff/team-chat', content, filename, bytes);
+
+  String messageFileUrl(ChatMessage m) => '$baseUrl/api/messages/${m.id}/file?$_tokenQuery';
+  String teamFileUrl(ChatMessage m) => '$baseUrl/api/staff/team-chat/${m.id}/file?$_tokenQuery';
+
+  /// The HR <-> IT team chat (same call for both teams).
+  Future<List<ChatMessage>> getTeamChat() async {
+    final res = await http.get(Uri.parse('$baseUrl/api/staff/team-chat'), headers: _headers);
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    return (data['messages'] as List).map((e) => ChatMessage.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<void> sendTeamMessage(String content) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/staff/team-chat'),
+      headers: _headers,
+      body: jsonEncode({'content': content}),
+    );
+    if (res.statusCode != 201) throw ApiException(_extractMessage(res));
+  }
+
   Future<List<MessageConversation>> getHrConversations() async {
     final res = await http.get(Uri.parse('$baseUrl/api/hr/messages'), headers: _headers);
     if (res.statusCode != 200) throw ApiException(_extractMessage(res));
@@ -1281,6 +1336,62 @@ class ApiClient {
 
   Future<void> markAllStaffNotificationsRead() async {
     final res = await http.post(Uri.parse('$baseUrl/api/staff/notifications/read-all'), headers: _headers);
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+  }
+
+  /// The working day in minutes and the working days (0 = Monday ... 6 = Sunday):
+  /// {start_minutes, end_minutes, first_day, last_day}.
+  Future<Map<String, dynamic>> getWorkingHours() async {
+    final res = await http.get(Uri.parse('$baseUrl/api/schedule/hours'), headers: _headers);
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// HR only: sets the working hours (whole hours, in minutes) and days.
+  Future<Map<String, dynamic>> saveWorkingHours(int startMinutes, int endMinutes, int firstDay, int lastDay) async {
+    final res = await http.put(
+      Uri.parse('$baseUrl/api/schedule/hours'),
+      headers: _headers,
+      body: jsonEncode({
+        'start_minutes': startMinutes,
+        'end_minutes': endMinutes,
+        'first_day': firstDay,
+        'last_day': lastDay,
+      }),
+    );
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Forgot password, step 1: emails a 6-digit code. Returns the message to show.
+  Future<String> requestPasswordResetCode(String email) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/auth/forgot-password'),
+      headers: _headers,
+      body: jsonEncode({'email': email}),
+    );
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    return (jsonDecode(res.body) as Map<String, dynamic>)['message'] as String;
+  }
+
+  /// Forgot password, step 2: checks the code. Returns the token for step 3.
+  Future<String> verifyPasswordResetCode(String email, String code) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/auth/verify-reset-code'),
+      headers: _headers,
+      body: jsonEncode({'email': email, 'code': code}),
+    );
+    if (res.statusCode != 200) throw ApiException(_extractMessage(res));
+    return (jsonDecode(res.body) as Map<String, dynamic>)['reset_token'] as String;
+  }
+
+  /// Forgot password, step 3: saves the new password.
+  Future<void> resetPasswordWithCode(String email, String resetToken, String newPassword) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/api/auth/reset-password'),
+      headers: _headers,
+      body: jsonEncode({'email': email, 'reset_token': resetToken, 'new_password': newPassword}),
+    );
     if (res.statusCode != 200) throw ApiException(_extractMessage(res));
   }
 

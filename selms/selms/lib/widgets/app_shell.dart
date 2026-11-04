@@ -444,12 +444,13 @@ class SelmsSession extends InheritedWidget {
       apiBaseUrl != old.apiBaseUrl || token != old.token || role != old.role;
 }
 
-/// Small top-right cluster (bell + avatar + "Admin") reused on every page.
+/// Small top-right cluster (bell + avatar + "HR Staff" or "IT Staff") reused on every page.
 class TopBarActions extends StatelessWidget {
   const TopBarActions({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final staffLabel = SelmsSession.maybeOf(context)?.role == 'it' ? 'IT Staff' : 'HR Staff';
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -461,8 +462,8 @@ class TopBarActions extends StatelessWidget {
           decoration: const BoxDecoration(color: SelmsColors.ink, shape: BoxShape.circle),
         ),
         const SizedBox(width: 8),
-        const Text('Admin',
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: SelmsColors.ink)),
+        Text(staffLabel,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: SelmsColors.ink)),
       ],
     );
   }
@@ -547,6 +548,50 @@ class _NotificationBellState extends State<NotificationBell> {
     if (d.inMinutes < 60) return '${d.inMinutes}m ago';
     if (d.inHours < 24) return '${d.inHours}h ago';
     return '${d.inDays}d ago';
+  }
+
+  /// "4 Nov, 2:30 PM"
+  String _whenConfirmed(String iso) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final d = DateTime.parse(iso).toLocal();
+    final h = d.hour % 12 == 0 ? 12 : d.hour % 12;
+    return '${d.day} ${months[d.month - 1]}, $h:${d.minute.toString().padLeft(2, '0')} ${d.hour >= 12 ? 'PM' : 'AM'}';
+  }
+
+  /// The "I got it" button, or who confirmed it and when.
+  Widget _confirmation(Map<String, dynamic> n, VoidCallback refreshList) {
+    final at = n['confirmed_at'] as String?;
+    if (at != null) {
+      final who = n['confirmed_by'] as String?;
+      return Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: Text('✓ Confirmed${who == null ? '' : ' by $who'}, ${_whenConfirmed(at)}',
+            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF16A34A))),
+      );
+    }
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: ElevatedButton(
+          onPressed: () async {
+            try {
+              await _api?.confirmStaffNotification(n['id'] as String);
+            } catch (_) {}
+            await _load();
+            refreshList();
+          },
+          style: ElevatedButton.styleFrom(
+            backgroundColor: SelmsColors.ink,
+            foregroundColor: Colors.white,
+            elevation: 0,
+            visualDensity: VisualDensity.compact,
+            textStyle: const TextStyle(fontSize: 12),
+          ),
+          child: const Text('I got it'),
+        ),
+      ),
+    );
   }
 
   Future<void> _open(Map<String, dynamic> n) async {
@@ -693,6 +738,8 @@ class _NotificationBellState extends State<NotificationBell> {
                                               const SizedBox(height: 4),
                                               Text(_ago(n['at'] as String? ?? ''),
                                                   style: const TextStyle(fontSize: 10.5, color: SelmsColors.textMuted)),
+                                              if (n['needs_confirm'] == true)
+                                                _confirmation(n, () => setDialogState(() {})),
                                             ],
                                           ),
                                         ),
